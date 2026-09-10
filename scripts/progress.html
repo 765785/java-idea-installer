@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>安装进度 - Java 一键搭建</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f8fb;
+        --surface: #fff;
+        --text: #172238;
+        --muted: #5d6978;
+        --line: #dbe3ea;
+        --orange: #e9662b;
+        --green: #178d79;
+        --red: #c33c3c;
+        --blue: #3a72ce;
+        font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); }
+      main { width: min(860px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0; }
+      .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 40px; font-weight: 750; }
+      .brand img { width: 36px; height: 36px; border-radius: 10px; }
+      .panel { padding: 32px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 18px 50px rgba(23, 34, 56, .09); }
+      .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+      h1 { margin: 0; font-size: clamp(28px, 5vw, 44px); line-height: 1.18; }
+      .eyebrow { margin: 0 0 8px; color: var(--orange); font-size: 13px; font-weight: 800; letter-spacing: .08em; }
+      .percent { color: var(--orange); font: 800 34px/1 "Cascadia Code", Consolas, monospace; }
+      .track { height: 10px; margin: 24px 0 14px; overflow: hidden; border-radius: 99px; background: #e8eef4; }
+      .track span { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--orange); transition: width .3s ease; }
+      .message { margin: 0; color: var(--muted); font-size: 14px; }
+      .steps { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 24px 0 0; padding: 0; list-style: none; }
+      .step { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+      .step strong { display: block; font-size: 13px; }
+      .step span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+      .step.running { border-color: var(--orange); background: #fff1e8; }
+      .step.complete { border-color: #a7d9cf; background: #e7f7f3; }
+      .step.failed { border-color: #efb7b7; background: #fff0ef; }
+      .notice { margin-top: 24px; padding: 14px; border-radius: 10px; background: #edf3ff; color: #315daa; font-size: 13px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+      .button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; padding: 0 18px; border-radius: 9px; background: var(--orange); color: #fff; font-size: 14px; font-weight: 750; text-decoration: none; }
+      .button.secondary { border: 1px solid var(--line); background: #fff; color: var(--text); }
+      .log { max-height: 220px; overflow: auto; margin-top: 20px; padding: 14px; border-radius: 10px; background: #101720; color: #dce5ee; font: 12px/1.7 "Cascadia Code", Consolas, monospace; white-space: pre-wrap; }
+      [hidden] { display: none !important; }
+      @media (max-width: 640px) {
+        main { padding: 30px 0; }
+        .panel { padding: 22px; }
+        .top { flex-direction: column; gap: 10px; }
+        .steps { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <svg width="36" height="36" viewBox="0 0 64 64" aria-hidden="true">
+          <rect width="64" height="64" rx="15" fill="#172238"/>
+          <path d="M22 18h20v23.5c0 6.6-5.4 12-12 12h-.5a10 10 0 0 1-7.1-2.9l3.7-4.1a4.8 4.8 0 0 0 3.4 1.4 5.4 5.4 0 0 0 5.4-5.4V25H25v-2.4A4.6 4.6 0 0 1 22 18Z" fill="#f17a35"/>
+          <path d="M29.5 31.5h5v11.8a3.8 3.8 0 0 1-3.8 3.8 3.8 3.8 0 0 1-3.8-3.8v-.7h4.6v.6c0 .3.2.5.5.5s.5-.2.5-.5V35.3h-3v-3.8Z" fill="#fff"/>
+          <path d="M43 34h3v7.5c0 4.7-3.8 8.5-8.5 8.5H37a9 9 0 0 1-6-2.3l2.8-3.1a4.7 4.7 0 0 0 3.1 1.2h.6A4.5 4.5 0 0 0 42 41.3V38a8 8 0 0 1-1 .1h-1v-3h1c.4 0 .7 0 1-.1V34h1Z" fill="#29a99a"/>
+        </svg>
+        <span>Java 一键搭建</span>
+      </div>
+      <section class="panel">
+        <div class="top">
+          <div>
+            <p class="eyebrow">安装进度</p>
+            <h1 id="title">正在处理你的环境</h1>
+          </div>
+          <span class="percent" id="percent">0%</span>
+        </div>
+        <div class="track" aria-hidden="true"><span id="bar"></span></div>
+        <p class="message" id="message">正在等待脚本写入进度...</p>
+        <ol class="steps" id="steps"></ol>
+        <div class="notice" id="connectionNotice" hidden>
+          浏览器无法读取本地 JSON。请使用脚本自动启动的本地进度地址，或关闭本页查看终端进度。
+        </div>
+        <div class="actions" id="actions" hidden>
+          <a class="button" id="returnLink" href="#">返回网页查看最终报告</a>
+          <a class="button secondary" id="folderHint" href="progress.json" target="_blank" rel="noreferrer">查看原始进度 JSON</a>
+        </div>
+        <pre class="log" id="log" hidden></pre>
+      </section>
+    </main>
+    <script src="progress.js"></script>
+  </body>
+</html>

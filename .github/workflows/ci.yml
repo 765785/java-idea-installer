@@ -1,0 +1,106 @@
+name: Static checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-static:
+    name: Windows script checks
+    runs-on: windows-latest
+    env:
+      JAVA_SETUP_NO_UI: "1"
+      JAVA_SETUP_NO_PAUSE: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object {
+                Write-Error "$($_.Extent.File):$($_.Extent.StartLineNumber): $($_.Message)"
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Invoke detection batch entrypoint
+        shell: pwsh
+        run: |
+          $process = Start-Process `
+            -FilePath "cmd.exe" `
+            -ArgumentList "/d", "/c", "scripts\detect.bat" `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+          if ($process.ExitCode -notin @(0, 10, 20)) {
+            throw "detect.bat returned unexpected exit code $($process.ExitCode)"
+          }
+
+  macos-static:
+    name: macOS script checks
+    runs-on: macos-latest
+    env:
+      JAVA_SETUP_NO_UI: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install ShellCheck
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            brew install shellcheck
+          fi
+
+      - name: Check shell syntax
+        run: |
+          bash -n \
+            scripts/lib/common-functions.sh \
+            scripts/detect.sh \
+            scripts/install.sh \
+            scripts/uninstall.sh \
+            scripts/detect.command \
+            scripts/install.command \
+            scripts/uninstall.command \
+            scripts/package-toolkits.sh
+
+      - name: Run ShellCheck
+        run: |
+          shellcheck -x -s bash \
+            scripts/lib/common-functions.sh \
+            scripts/detect.sh \
+            scripts/install.sh \
+            scripts/uninstall.sh \
+            scripts/detect.command \
+            scripts/install.command \
+            scripts/uninstall.command \
+            scripts/package-toolkits.sh
+
+      - name: Invoke detection shell entrypoint
+        run: |
+          set +e
+          bash scripts/detect.sh
+          code=$?
+          set -e
+          if [[ "$code" -ne 0 && "$code" -ne 10 && "$code" -ne 20 ]]; then
+            echo "detect.sh returned unexpected exit code $code"
+            exit 1
+          fi

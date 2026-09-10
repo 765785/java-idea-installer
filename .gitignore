@@ -1,0 +1,18 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local test output
+_site/
+downloads/*.zip
+java-setup-reports/
+*.log
+
+# Local tooling
+node_modules/
+.cache/
+__pycache__/
+*.pyc
