@@ -53,6 +53,7 @@ New-ToolkitArchive -Name "java-idea-toolkit-windows.zip" -Files @(
     "repair-launch.html",
     "repair-launch.js",
     "repair-bridge.ps1",
+    "repair-run.bat",
     "lib\common-functions.bat",
     "lib\windows.ps1",
     "lib\progress-server.ps1"
@@ -70,6 +71,7 @@ New-ToolkitArchive -Name "java-idea-toolkit-macos.zip" -Files @(
     "repair-launch.html",
     "repair-launch.js",
     "repair-bridge.py",
+    "repair-run.sh",
     "lib\common-functions.sh",
     "lib\progress-server.py"
 )

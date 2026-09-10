@@ -20,11 +20,12 @@ from urllib.parse import urlparse
 class BridgeServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
-    def __init__(self, address, handler, *, root: Path, token: str, progress_file: Path, idle_minutes: int):
+    def __init__(self, address, handler, *, root: Path, token: str, progress_file: Path, sentinel_file: Path, idle_minutes: int):
         super().__init__(address, handler)
         self.root = root
         self.token = token
         self.progress_file = progress_file
+        self.sentinel_file = sentinel_file
         self.idle_seconds = idle_minutes * 60
         self.last_request = time.monotonic()
         self.lock = threading.Lock()
@@ -35,6 +36,12 @@ class BridgeServer(http.server.ThreadingHTTPServer):
         self.last_request = time.monotonic()
 
     def job_status(self, job: dict[str, object]) -> str:
+        if self.sentinel_file.is_file():
+            try:
+                exit_code = int(self.sentinel_file.read_text(encoding="utf-8").strip())
+                return "completed" if exit_code == 0 else "failed"
+            except (OSError, ValueError):
+                return "failed"
         if self.progress_file.is_file():
             try:
                 progress = json.loads(self.progress_file.read_text(encoding="utf-8"))
@@ -44,6 +51,15 @@ class BridgeServer(http.server.ThreadingHTTPServer):
                 if status in ("failed", "partial"):
                     return "failed"
                 if status == "running":
+                    try:
+                        updated_at = progress.get("updatedAt")
+                        if updated_at:
+                            from datetime import datetime, timedelta, timezone
+                            updated = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+                            if datetime.now(timezone.utc) - updated > timedelta(minutes=5):
+                                return "failed"
+                    except (TypeError, ValueError):
+                        pass
                     return "running"
             except (OSError, ValueError):
                 return "running"
@@ -112,12 +128,19 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
                 process = job["process"]
                 exit_code = process.poll()
                 status = self.server.job_status(job)
+                progress_payload = None
+                if self.server.progress_file.is_file():
+                    try:
+                        progress_payload = json.loads(self.server.progress_file.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        progress_payload = None
                 self.send_json(
                     200,
                     {
                         "status": status,
                         "jobId": job["jobId"],
                         "exitCode": exit_code,
+                        "progress": progress_payload,
                     },
                 )
             return
@@ -165,7 +188,9 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
             try:
                 if self.server.progress_file.exists():
                     self.server.progress_file.unlink()
-                process = start_terminal(self.server.root)
+                if self.server.sentinel_file.exists():
+                    self.server.sentinel_file.unlink()
+                process = start_terminal(self.server.root, self.server.sentinel_file)
             except Exception:
                 self.send_json(500, {"status": "error", "message": "Could not start Terminal."})
                 return
@@ -186,12 +211,13 @@ def re_full_hex(value: str, length: int) -> bool:
     return len(value) == length and all(char in "0123456789abcdefABCDEF" for char in value)
 
 
-def start_terminal(root: Path) -> subprocess.Popen:
-    command = f"cd {shlex.quote(str(root))} && ./install.sh --fix-all"
+def start_terminal(root: Path, sentinel_file: Path) -> subprocess.Popen:
+    command = f"cd {shlex.quote(str(root))} && ./repair-run.sh"
     escaped = command.replace("\\", "\\\\").replace('"', '\\"')
     script = f'tell application "Terminal" to do script "{escaped}"'
     environment = os.environ.copy()
     environment["JAVA_SETUP_NO_BRIDGE"] = "1"
+    environment["JAVA_SETUP_JOB_SENTINEL"] = str(sentinel_file)
     # Executable and arguments are fixed by the bridge; shell=False is explicit.
     return subprocess.Popen(  # nosec B603
         ["/usr/bin/osascript", "-e", script],
@@ -205,6 +231,7 @@ def main() -> None:
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--token", required=True)
     parser.add_argument("--progress-file", required=True, type=Path)
+    parser.add_argument("--sentinel-file", required=True, type=Path)
     parser.add_argument("--idle-minutes", type=int, default=30)
     args = parser.parse_args()
 
@@ -220,6 +247,7 @@ def main() -> None:
         root=root,
         token=args.token,
         progress_file=args.progress_file.resolve(),
+        sentinel_file=args.sentinel_file.resolve(),
         idle_minutes=args.idle_minutes,
     )
 

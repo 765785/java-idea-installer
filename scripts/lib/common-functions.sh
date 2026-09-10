@@ -639,6 +639,7 @@ start_repair_bridge() {
     --port "$port" \
     --token "$token" \
     --progress-file "$PROGRESS_DIR/progress.json" \
+    --sentinel-file "$PROGRESS_DIR/repair-job.exit" \
     --idle-minutes 30 \
     >"$log_file" 2>"$error_file" &
   sleep 0.6

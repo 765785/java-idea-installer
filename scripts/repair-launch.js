@@ -99,7 +99,13 @@
         if (result.status === "running") {
           elements.title.textContent = "修复正在执行";
           elements.message.textContent = "请保持终端窗口打开，修复完成后会自动更新。";
-          elements.state.textContent = `任务 ${jobId || ""}`;
+          elements.state.textContent = result.progress?.message || `任务 ${jobId || ""}`;
+          if (window.opener && !window.opener.closed && result.progress) {
+            window.opener.postMessage(
+              { type: "java-setup-repair-progress", progress: result.progress },
+              targetOrigin,
+            );
+          }
           return;
         }
         if (result.status === "completed" || result.status === "failed") {

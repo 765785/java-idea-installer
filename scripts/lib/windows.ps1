@@ -289,6 +289,7 @@ function Start-RepairBridge {
     $stdout = Join-Path $reportDirectory "repair-bridge.log"
     $stderr = Join-Path $reportDirectory "repair-bridge.error.log"
     $progressFile = Join-Path $reportDirectory "progress\progress.json"
+    $sentinelFile = Join-Path $reportDirectory "progress\repair-job.exit"
     $arguments = @(
         "-NoLogo",
         "-NoProfile",
@@ -298,6 +299,7 @@ function Start-RepairBridge {
         "-Port", [string]$port,
         "-Token", $token,
         "-ProgressFile", ('"{0}"' -f $progressFile),
+        "-SentinelFile", ('"{0}"' -f $sentinelFile),
         "-IdleMinutes", "30"
     )
 

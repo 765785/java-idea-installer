@@ -12,6 +12,9 @@ param(
     [Parameter(Mandatory)]
     [string]$ProgressFile,
 
+    [Parameter(Mandatory)]
+    [string]$SentinelFile,
+
     [int]$IdleMinutes = 30
 )
 
@@ -19,7 +22,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 
 $root = (Resolve-Path -LiteralPath $ToolkitRoot).Path
-$installScript = Join-Path $root "install.bat"
+$runnerScript = Join-Path $root "repair-run.bat"
 $launchFile = Join-Path $root "repair-launch.html"
 $launchScript = Join-Path $root "repair-launch.js"
 $localOrigin = "http://127.0.0.1:$Port"
@@ -27,8 +30,8 @@ $localOrigin = "http://127.0.0.1:$Port"
 if ($Token -notmatch "^[a-fA-F0-9]{64}$") {
     throw "Invalid bridge token."
 }
-if (-not (Test-Path -LiteralPath $installScript -PathType Leaf)) {
-    throw "install.bat was not found in the toolkit."
+if (-not (Test-Path -LiteralPath $runnerScript -PathType Leaf)) {
+    throw "repair-run.bat was not found in the toolkit."
 }
 if (-not (Test-Path -LiteralPath $launchFile -PathType Leaf) -or -not (Test-Path -LiteralPath $launchScript -PathType Leaf)) {
     throw "Repair launch assets were not found in the toolkit."
@@ -97,19 +100,33 @@ function Send-File {
 }
 
 function Start-RepairTerminal {
-    $command = '"{0}" --fix-all' -f $installScript
+    $command = '"{0}"' -f $runnerScript
     $previous = $env:JAVA_SETUP_NO_BRIDGE
+    $previousSentinel = $env:JAVA_SETUP_JOB_SENTINEL
     $env:JAVA_SETUP_NO_BRIDGE = "1"
+    $env:JAVA_SETUP_JOB_SENTINEL = $SentinelFile
     try {
         return Start-Process -FilePath "cmd.exe" -ArgumentList @("/k", $command) -WorkingDirectory $root -PassThru
     } finally {
         $env:JAVA_SETUP_NO_BRIDGE = $previous
+        $env:JAVA_SETUP_JOB_SENTINEL = $previousSentinel
     }
 }
 
 function Get-JobStatus {
     if (-not $script:CurrentJob) {
         return "idle"
+    }
+    if (Test-Path -LiteralPath $SentinelFile -PathType Leaf) {
+        try {
+            $exitCode = [int]((Get-Content -LiteralPath $SentinelFile -Raw).Trim())
+            if ($exitCode -eq 0) {
+                return "completed"
+            }
+            return "failed"
+        } catch {
+            return "failed"
+        }
     }
     if (Test-Path -LiteralPath $ProgressFile -PathType Leaf) {
         try {
@@ -121,6 +138,13 @@ function Get-JobStatus {
                 return "failed"
             }
             if ($progress.status -eq "running") {
+                try {
+                    if ($progress.updatedAt -and ([DateTime]::UtcNow - [DateTime]$progress.updatedAt -gt [TimeSpan]::FromMinutes(5))) {
+                        return "failed"
+                    }
+                } catch {
+                    return "running"
+                }
                 return "running"
             }
         } catch {
@@ -175,10 +199,19 @@ while ($listener.IsListening) {
                 continue
             }
             $state = Get-JobStatus
+            $progressPayload = $null
+            if (Test-Path -LiteralPath $ProgressFile -PathType Leaf) {
+                try {
+                    $progressPayload = Get-Content -LiteralPath $ProgressFile -Raw | ConvertFrom-Json
+                } catch {
+                    $progressPayload = $null
+                }
+            }
             Write-HttpJson -Context $context -StatusCode 200 -Body @{
                 status = $state
                 jobId = $script:CurrentJob.JobId
                 exitCode = if ($script:CurrentJob.Process.HasExited) { $script:CurrentJob.Process.ExitCode } else { $null }
+                progress = $progressPayload
             }
             continue
         }
@@ -219,6 +252,9 @@ while ($listener.IsListening) {
 
             if (Test-Path -LiteralPath $ProgressFile -PathType Leaf) {
                 Remove-Item -LiteralPath $ProgressFile -Force
+            }
+            if (Test-Path -LiteralPath $SentinelFile -PathType Leaf) {
+                Remove-Item -LiteralPath $SentinelFile -Force
             }
             $process = Start-RepairTerminal
             $jobId = [Guid]::NewGuid().ToString("N")

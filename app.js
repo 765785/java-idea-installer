@@ -716,6 +716,16 @@
       showToast("终端已启动，正在自动执行修复。");
       return;
     }
+    if (event.data?.type === "java-setup-repair-progress" && event.data.progress) {
+      const progress = event.data.progress;
+      renderProgress({
+        status: progress.status === "failed" ? "failed" : "running",
+        percent: progress.percent,
+        message: progress.message,
+        steps: progress.steps,
+      });
+      return;
+    }
     if (event.data?.type === "java-setup-repair-finished") {
       window.clearTimeout(state.repairLaunchTimer);
       const failed = event.data.status === "failed";
