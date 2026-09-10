@@ -52,7 +52,18 @@ if /I not "%JAVA_SETUP_NO_PAUSE%"=="1" pause
 exit /b %EXIT_CODE%
 
 :missing_toolkit
-echo [ERROR] The toolkit is incomplete.
-echo Download and extract the complete Windows toolkit, then run install.bat again.
+echo [INFO] The standalone script will download the verified toolkit...
+call :bootstrap
+if errorlevel 1 goto :bootstrap_failed
+call "%LOCALAPPDATA%\JavaIdeaInstaller\windows-toolkit\install.bat" %*
+exit /b %ERRORLEVEL%
+
+:bootstrap
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $base='https://765785.github.io/java-idea-installer/downloads/'; $dir=Join-Path $env:LOCALAPPDATA 'JavaIdeaInstaller\windows-toolkit'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $sums=Invoke-WebRequest -UseBasicParsing -Uri ($base+'SHA256SUMS.txt') -TimeoutSec 30; $line=@($sums.Content -split [Environment]::NewLine | Where-Object { $_ -match '([0-9a-f]{64})\s+java-idea-toolkit-windows\.zip' })[0]; if(-not $line){ throw 'SHA256SUMS.txt does not contain the Windows toolkit.' }; $expected=([regex]::Match($line,'[0-9a-f]{64}').Value).ToLowerInvariant(); $zip=Join-Path $dir 'toolkit.zip'; Invoke-WebRequest -UseBasicParsing -Uri ($base+'java-idea-toolkit-windows.zip') -OutFile $zip -TimeoutSec 300; $sha=[Security.Cryptography.SHA256]::Create(); $stream=[IO.File]::OpenRead($zip); $actual=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant(); $stream.Dispose(); $sha.Dispose(); if($actual -ne $expected){ Remove-Item -LiteralPath $zip -Force; throw 'Windows toolkit SHA-256 verification failed.' }; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; Remove-Item -LiteralPath $zip -Force"
+exit /b %ERRORLEVEL%
+
+:bootstrap_failed
+echo [ERROR] Toolkit download or verification failed.
+echo Open https://765785.github.io/java-idea-installer/ and download the Windows toolkit manually.
 if /I not "%JAVA_SETUP_NO_PAUSE%"=="1" pause
 exit /b 1

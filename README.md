@@ -31,6 +31,8 @@
 
 浏览器不能静默执行本机程序，因此“一键”始终包含一次明确的手动运行或系统授权。
 
+如果只拿到了单独的 Windows `detect.bat`、`install.bat` 或 `uninstall.bat`，脚本会自动下载官方 Windows 工具包、核对 `SHA256SUMS.txt` 后再继续执行，不需要手动补放 `lib` 文件夹。
+
 ## 支持范围
 
 | 项目 | Windows | macOS |
