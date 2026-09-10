@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMON="$SCRIPT_DIR/lib/common-functions.sh"
 DRY_RUN=0
 FIX=""
+FIX_ALL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,6 +15,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --fix-all)
+      FIX_ALL=1
       shift
       ;;
     *)
@@ -30,12 +35,18 @@ fi
 TOOLKIT_ROOT="$SCRIPT_DIR"
 export TOOLKIT_ROOT
 export DRY_RUN
+export FIX_ALL
 # shellcheck source=scripts/lib/common-functions.sh
 source "$COMMON"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   log_error "此脚本仅支持 macOS。"
   exit 1
+fi
+
+if [[ "$FIX_ALL" == "1" ]]; then
+  run_fix_all
+  exit $?
 fi
 
 if [[ -n "$FIX" ]]; then

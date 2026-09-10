@@ -16,6 +16,9 @@ rm -f "$OUTPUT/java-idea-toolkit-windows.zip" "$OUTPUT/java-idea-toolkit-macos.z
     uninstall.bat \
     progress.html \
     progress.js \
+    repair-launch.html \
+    repair-launch.js \
+    repair-bridge.ps1 \
     lib/common-functions.bat \
     lib/windows.ps1 \
     lib/progress-server.ps1
@@ -32,6 +35,9 @@ rm -f "$OUTPUT/java-idea-toolkit-windows.zip" "$OUTPUT/java-idea-toolkit-macos.z
     uninstall.sh \
     progress.html \
     progress.js \
+    repair-launch.html \
+    repair-launch.js \
+    repair-bridge.py \
     lib/common-functions.sh \
     lib/progress-server.py
 )

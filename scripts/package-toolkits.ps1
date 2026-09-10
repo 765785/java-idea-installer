@@ -50,6 +50,9 @@ New-ToolkitArchive -Name "java-idea-toolkit-windows.zip" -Files @(
     "uninstall.bat",
     "progress.html",
     "progress.js",
+    "repair-launch.html",
+    "repair-launch.js",
+    "repair-bridge.ps1",
     "lib\common-functions.bat",
     "lib\windows.ps1",
     "lib\progress-server.ps1"
@@ -64,6 +67,9 @@ New-ToolkitArchive -Name "java-idea-toolkit-macos.zip" -Files @(
     "uninstall.sh",
     "progress.html",
     "progress.js",
+    "repair-launch.html",
+    "repair-launch.js",
+    "repair-bridge.py",
     "lib\common-functions.sh",
     "lib\progress-server.py"
 )

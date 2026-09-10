@@ -72,6 +72,7 @@ jobs:
 
       - name: Check shell syntax
         run: |
+          python3 -m py_compile scripts/repair-bridge.py scripts/lib/progress-server.py
           bash -n \
             scripts/lib/common-functions.sh \
             scripts/detect.sh \

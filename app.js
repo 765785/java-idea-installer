@@ -16,7 +16,6 @@
     "idea_repair",
     "gatekeeper",
     "vc_runtime",
-    "port",
   ]);
 
   const state = {
@@ -24,6 +23,11 @@
     selectedOs: "unsupported",
     currentReport: null,
     currentAction: "install",
+    bridge: null,
+    repairActions: [],
+    repairWindow: null,
+    repairOrigin: null,
+    repairLaunchTimer: null,
   };
 
   const elements = {
@@ -37,6 +41,7 @@
     downloadActions: document.querySelector("#downloadActions"),
     downloadPackage: document.querySelector("#downloadPackage"),
     downloadMeta: document.querySelector("#downloadMeta"),
+    downloadFullPackage: document.querySelector("#downloadFullPackage"),
     resultFileInput: document.querySelector("#resultFileInput"),
     dropZone: document.querySelector("#dropZone"),
     reportEmpty: document.querySelector("#reportEmpty"),
@@ -47,10 +52,10 @@
     summaryCounts: document.querySelector("#summaryCounts"),
     componentList: document.querySelector("#componentList"),
     healthSection: document.querySelector("#healthSection"),
+    healthTitle: document.querySelector("#healthTitle"),
+    healthIntro: document.querySelector("#healthIntro"),
+    fixAllButton: document.querySelector("#fixAllButton"),
     healthList: document.querySelector("#healthList"),
-    nextActionTitle: document.querySelector("#nextActionTitle"),
-    nextActionCopy: document.querySelector("#nextActionCopy"),
-    nextActionButton: document.querySelector("#nextActionButton"),
     progressSection: document.querySelector("#progress"),
     progressPercent: document.querySelector("#progressPercent"),
     progressBar: document.querySelector("#progressBar"),
@@ -60,11 +65,10 @@
     guideTitle: document.querySelector("#guideTitle"),
     guideSteps: document.querySelector("#guideSteps"),
     guideDownload: document.querySelector("#guideDownload"),
-    commandDialog: document.querySelector("#commandDialog"),
-    commandTitle: document.querySelector("#commandTitle"),
-    commandDescription: document.querySelector("#commandDescription"),
-    commandText: document.querySelector("#commandText"),
-    copyCommand: document.querySelector("#copyCommand"),
+    repairDialog: document.querySelector("#repairDialog"),
+    repairDescription: document.querySelector("#repairDescription"),
+    repairList: document.querySelector("#repairList"),
+    confirmRepair: document.querySelector("#confirmRepair"),
     toast: document.querySelector("#toast"),
   };
 
@@ -74,11 +78,17 @@
     initTheme();
     bindEvents();
     detectSystem();
+    restoreBridgeFromHash();
     restoreResultFromHash();
   }
 
   function initTheme() {
-    const stored = localStorage.getItem("java-setup-theme");
+    let stored = null;
+    try {
+      stored = localStorage.getItem("java-setup-theme");
+    } catch {
+      stored = null;
+    }
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     setTheme(stored || (prefersDark ? "dark" : "light"));
   }
@@ -89,7 +99,45 @@
     const dark = nextTheme === "dark";
     elements.themeToggle.setAttribute("aria-pressed", String(dark));
     elements.themeToggle.setAttribute("aria-label", dark ? "切换到浅色主题" : "切换到深色主题");
-    localStorage.setItem("java-setup-theme", nextTheme);
+    try {
+      localStorage.setItem("java-setup-theme", nextTheme);
+    } catch {
+      // Theme persistence is optional when browser storage is disabled.
+    }
+  }
+
+  function restoreBridgeFromHash() {
+    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+    const params = new URLSearchParams(hash);
+    const port = Number.parseInt(params.get("bridgePort") || "", 10);
+    const token = params.get("bridgeToken") || "";
+    if (Number.isInteger(port) && port >= 1024 && port <= 65535 && /^[a-f0-9]{64}$/i.test(token)) {
+      state.bridge = { port, token };
+      try {
+        sessionStorage.setItem("java-setup-repair-bridge", JSON.stringify(state.bridge));
+      } catch {
+        // The current page session still keeps the in-memory bridge details.
+      }
+      return;
+    }
+
+    try {
+      const stored = JSON.parse(sessionStorage.getItem("java-setup-repair-bridge") || "null");
+      if (
+        Number.isInteger(stored?.port)
+        && stored.port >= 1024
+        && stored.port <= 65535
+        && /^[a-f0-9]{64}$/i.test(stored?.token || "")
+      ) {
+        state.bridge = { port: stored.port, token: stored.token };
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("java-setup-repair-bridge");
+      } catch {
+        // Ignore unavailable storage.
+      }
+    }
   }
 
   function bindEvents() {
@@ -101,6 +149,7 @@
       selectOs(state.detectedOs, true);
       document.querySelector("#report").scrollIntoView({ behavior: "smooth", block: "start" });
       if (state.detectedOs === "windows" || state.detectedOs === "macos") {
+        downloadLauncher(state.detectedOs);
         window.setTimeout(() => openGuide(state.detectedOs), 420);
       } else {
         showToast("当前系统暂未自动支持，请看其他系统的手动安装建议。");
@@ -112,6 +161,7 @@
         const os = button.dataset.os;
         selectOs(os, true);
         if (os === "windows" || os === "macos") {
+          downloadLauncher(os);
           openGuide(os);
         } else {
           showToast("Windows 与 macOS 可以直接使用工具包，其他系统请参考手动安装说明。");
@@ -120,8 +170,8 @@
     });
 
     elements.downloadPackage.addEventListener("click", () => {
-      markStep("install");
-      showToast("工具包开始下载，解压后运行 install 脚本。");
+      markStep("detect");
+      showToast("修复助手开始下载，运行后会自动完成环境准备。");
     });
 
     elements.resultFileInput.addEventListener("change", (event) => {
@@ -161,8 +211,9 @@
     });
 
     elements.resetReport.addEventListener("click", resetReport);
-    elements.nextActionButton.addEventListener("click", handleNextAction);
-    elements.copyCommand.addEventListener("click", copyFixCommand);
+    elements.fixAllButton.addEventListener("click", showRepairConfirmation);
+    elements.confirmRepair.addEventListener("click", launchRepair);
+    window.addEventListener("message", handleRepairMessage);
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => button.closest("dialog")?.close());
@@ -253,12 +304,15 @@
     }
 
     const extension = os === "windows" ? "windows" : "macos";
-    elements.downloadPackage.href = `./downloads/java-idea-toolkit-${extension}.zip`;
-    elements.downloadPackage.setAttribute("download", `java-idea-toolkit-${extension}.zip`);
+    const launcherName = os === "windows" ? "detect.bat" : "detect.command";
+    elements.downloadPackage.href = `./scripts/${launcherName}`;
+    elements.downloadPackage.setAttribute("download", launcherName);
+    elements.downloadFullPackage.href = `./downloads/java-idea-toolkit-${extension}.zip`;
+    elements.downloadFullPackage.setAttribute("download", `java-idea-toolkit-${extension}.zip`);
 
     elements.downloadMeta.textContent = os === "windows"
-      ? "解压后双击 detect.bat；安装时双击 install.bat。"
-      : "解压后双击 detect.command，或在终端运行 detect.sh。";
+      ? "下载后双击 detect.bat，后续安装和验证会自动进行。"
+      : "下载后双击 detect.command；如被拦截，请右键选择“打开”。";
 
     if (scrollToDownloads) {
       elements.downloadActions.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -272,20 +326,20 @@
 
     state.selectedOs = os;
     selectOs(os, false);
-    elements.guideTitle.textContent = os === "windows" ? "运行 Windows 检测工具包" : "运行 macOS 检测工具包";
+    elements.guideTitle.textContent = os === "windows" ? "运行 Windows 一键助手" : "运行 macOS 一键助手";
 
     const steps = os === "windows"
       ? [
-          "点击下载工具包，并解压到“下载”文件夹。",
-          "双击 detect.bat。如系统询问权限，请先看清来源后允许。",
-          "脚本会生成 detection_result.json，并自动尝试打开本页回传结果。",
-          "如果页面没有自动更新，把 detection_result.json 拖到检测报告区域。",
+          "点击下载单个 detect.bat 文件。",
+          "双击运行。助手会自动下载并校验完整工具包。",
+          "检测完成后页面会自动打开，并显示可修复的问题。",
+          "点击“一键修复全部”并确认，后续安装与验证由终端自动完成。",
         ]
       : [
-          "点击下载工具包，并解压到“下载”文件夹。",
-          "双击 detect.command；如果系统拦截，右键选择“打开”。",
-          "终端会完成检测，并自动尝试打开本页回传结果。",
-          "如果页面没有自动更新，把 detection_result.json 拖到检测报告区域。",
+          "点击下载单个 detect.command 文件。",
+          "双击运行；如果系统拦截，右键选择“打开”。",
+          "助手会自动下载并校验完整工具包，然后打开检测报告。",
+          "点击“一键修复全部”并确认，后续操作在终端自动完成。",
         ];
 
     elements.guideSteps.replaceChildren(...steps.map((step) => {
@@ -293,9 +347,23 @@
       item.textContent = step;
       return item;
     }));
-    elements.guideDownload.href = `./downloads/java-idea-toolkit-${os}.zip`;
-    elements.guideDownload.setAttribute("download", `java-idea-toolkit-${os}.zip`);
+    const launcherName = os === "windows" ? "detect.bat" : "detect.command";
+    elements.guideDownload.href = `./scripts/${launcherName}`;
+    elements.guideDownload.setAttribute("download", launcherName);
     elements.guideDialog.showModal();
+  }
+
+  function downloadLauncher(os) {
+    if (os !== "windows" && os !== "macos") {
+      return;
+    }
+    const launcher = document.createElement("a");
+    launcher.href = `./scripts/${os === "windows" ? "detect.bat" : "detect.command"}`;
+    launcher.download = os === "windows" ? "detect.bat" : "detect.command";
+    document.body.append(launcher);
+    launcher.click();
+    launcher.remove();
+    showToast("修复助手已开始下载，请双击运行。");
   }
 
   async function readResultFile(file) {
@@ -383,16 +451,21 @@
     );
 
     elements.componentList.replaceChildren(...components.map(renderComponent));
-    elements.healthSection.hidden = health.length === 0;
+    const fixableHealth = health.filter((item) => item.fixable === true && FIX_ACTIONS.has(item.action));
+    state.repairActions = [...new Set(fixableHealth.map((item) => item.action))];
+    const canRepair = state.repairActions.length > 0 || totals.errors > 0;
+    elements.healthSection.hidden = health.length === 0 && !canRepair;
+    elements.healthTitle.textContent = fixableHealth.length > 0
+      ? `已发现 ${fixableHealth.length} 个可修复问题`
+      : "健康诊断";
+    elements.healthIntro.textContent = canRepair
+      ? "确认后将直接打开终端，按安全顺序自动处理全部问题。"
+      : "没有发现可自动修复的问题。";
+    elements.fixAllButton.hidden = !canRepair;
     elements.healthList.replaceChildren(...health.map(renderHealthItem));
 
     const needsInstall = totals.errors > 0 || totals.warnings > 0;
-    state.currentAction = needsInstall ? "install" : "verify";
-    elements.nextActionTitle.textContent = needsInstall ? "下一步：安装或修复环境" : "下一步：打开 IDEA 验证";
-    elements.nextActionCopy.textContent = needsInstall
-      ? "下载当前系统的安装工具包；脚本会跳过已经正常的组件。"
-      : "环境已通过检测，可以打开 IntelliJ IDEA 创建第一个 Java 项目。";
-    elements.nextActionButton.textContent = needsInstall ? "下载安装工具包" : "查看验证步骤";
+    state.currentAction = canRepair ? "fix-all" : "verify";
     markStep(needsInstall ? "install" : "verify");
   }
 
@@ -520,17 +593,15 @@
     if (item.fixable === false || !FIX_ACTIONS.has(item.action)) {
       const status = document.createElement("span");
       status.className = "component-status status-neutral";
-      status.textContent = item.fixable === false ? "仅提示" : "需手动处理";
+      status.textContent = "仅提示";
       wrapper.append(copy, status);
       return wrapper;
     }
 
-    const button = document.createElement("button");
-    button.className = "button button-secondary small-button";
-    button.type = "button";
-    button.textContent = "一键修复";
-    button.addEventListener("click", () => showFixCommand(item.action, title.textContent));
-    wrapper.append(copy, button);
+    const status = document.createElement("span");
+    status.className = "component-status status-warning";
+    status.textContent = "可自动处理";
+    wrapper.append(copy, status);
     return wrapper;
   }
 
@@ -542,28 +613,121 @@
       idea_repair: "IDEA 可能损坏",
       gatekeeper: "macOS Gatekeeper 拦截",
       vc_runtime: "缺少 VC++ 运行库",
-      port: "开发端口被占用",
     };
     return titles[id] || "环境健康问题";
   }
 
-  function showFixCommand(action, title) {
-    const os = state.selectedOs;
-    const command = os === "windows"
-      ? `.\\install.bat --fix ${action}`
-      : `./install.sh --fix ${action}`;
-    elements.commandTitle.textContent = title;
-    elements.commandDescription.textContent = "先解压安装工具包，在工具包目录中运行以下命令：";
-    elements.commandText.textContent = command;
-    elements.commandDialog.showModal();
+  function showRepairConfirmation() {
+    if (state.currentAction !== "fix-all") {
+      showToast("当前没有需要修复的问题。");
+      return;
+    }
+    if (elements.repairDialog.open) {
+      return;
+    }
+    const health = Array.isArray(state.currentReport?.health)
+      ? state.currentReport.health.filter((item) => item && typeof item === "object")
+      : [];
+    const fixable = health.filter((item) => item.fixable === true && FIX_ACTIONS.has(item.action));
+    const items = fixable.length > 0 ? fixable : health;
+    elements.repairDescription.textContent = `修复助手将按安全顺序处理以下 ${Math.max(items.length, 1)} 项问题，并自动打开终端执行。`;
+    elements.repairList.replaceChildren(...items.map((item) => {
+      const entry = document.createElement("li");
+      entry.textContent = item.title || healthTitle(item.id);
+      return entry;
+    }));
+    if (items.length === 0) {
+      const entry = document.createElement("li");
+      entry.textContent = "安装或修复 Java、IDEA 与环境变量";
+      elements.repairList.append(entry);
+    }
+    elements.repairDialog.showModal();
   }
 
-  async function copyFixCommand() {
-    try {
-      await navigator.clipboard.writeText(elements.commandText.textContent);
-      showToast("命令已复制。");
-    } catch {
-      showToast("复制失败，请手动选择命令文本。");
+  function createRequestId() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function launchRepair() {
+    if (state.repairWindow) {
+      return;
+    }
+    elements.repairDialog.close();
+    if (!state.bridge) {
+      showToast("本地修复助手未运行，请重新运行新版启动器一次。");
+      openGuide(state.selectedOs);
+      return;
+    }
+
+    const bridgeOrigin = `http://127.0.0.1:${state.bridge.port}`;
+    state.repairOrigin = bridgeOrigin;
+    const returnUrl = `${window.location.origin}${window.location.pathname}`;
+    const fragment = new URLSearchParams({
+      token: state.bridge.token,
+      requestId: createRequestId(),
+      return: returnUrl,
+    });
+    const launchUrl = `${bridgeOrigin}/launch#${fragment.toString()}`;
+    state.repairWindow = window.open(launchUrl, "java-setup-repair", "popup,width=560,height=420");
+    if (!state.repairWindow) {
+      showToast("浏览器阻止了修复窗口，请允许本站打开弹窗后重试。");
+      return;
+    }
+    window.clearTimeout(state.repairLaunchTimer);
+    state.repairLaunchTimer = window.setTimeout(() => {
+      if (state.bridge) {
+        try {
+          sessionStorage.removeItem("java-setup-repair-bridge");
+        } catch {
+          // Ignore unavailable storage.
+        }
+        state.bridge = null;
+        state.repairOrigin = null;
+        state.repairWindow = null;
+        elements.progressSection.hidden = true;
+        elements.reportContent.hidden = false;
+        showToast("修复助手没有响应，请重新运行新版启动器后再试。");
+      }
+    }, 5000);
+
+    renderProgress({
+      status: "running",
+      percent: 20,
+      message: "修复终端正在启动，请在终端窗口查看执行过程。",
+      steps: [{ id: "fix-all", label: "执行全部修复", status: "running", estimatedSeconds: 300 }],
+    });
+    markStep("install");
+  }
+
+  function handleRepairMessage(event) {
+    if (event.origin !== state.repairOrigin || event.source !== state.repairWindow) {
+      return;
+    }
+    if (event.data?.type === "java-setup-repair-started") {
+      window.clearTimeout(state.repairLaunchTimer);
+      try {
+        sessionStorage.removeItem("java-setup-repair-bridge");
+      } catch {
+        // Ignore unavailable storage.
+      }
+      state.bridge = null;
+      showToast("终端已启动，正在自动执行修复。");
+      return;
+    }
+    if (event.data?.type === "java-setup-repair-finished") {
+      window.clearTimeout(state.repairLaunchTimer);
+      const failed = event.data.status === "failed";
+      renderProgress({
+        status: failed ? "failed" : "success",
+        percent: failed ? 70 : 100,
+        message: failed ? "修复未完成，请查看终端输出。" : "修复完成，正在打开最终报告。",
+        steps: [{ id: "fix-all", label: "执行全部修复", status: failed ? "failed" : "complete", estimatedSeconds: 300 }],
+      });
+      showToast(failed ? "修复未完成，请查看终端输出。" : "修复完成，正在打开最终报告。");
+      state.repairOrigin = null;
+      state.repairWindow = null;
     }
   }
 
@@ -629,20 +793,17 @@
     elements.reportEmpty.hidden = false;
     elements.resetReport.hidden = true;
     elements.resultFileInput.value = "";
+    window.clearTimeout(state.repairLaunchTimer);
+    try {
+      sessionStorage.removeItem("java-setup-repair-bridge");
+    } catch {
+      // Ignore unavailable storage.
+    }
+    state.bridge = null;
+    state.repairOrigin = null;
+    state.repairWindow = null;
     history.replaceState(null, "", window.location.pathname + window.location.search);
     document.querySelector("#report").scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function handleNextAction() {
-    if (state.currentAction === "verify") {
-      markStep("verify");
-      showToast("打开 IDEA，新建 Java 项目并运行 Hello World 即可。");
-      return;
-    }
-    selectOs(state.selectedOs, true);
-    if (state.selectedOs === "windows" || state.selectedOs === "macos") {
-      openGuide(state.selectedOs);
-    }
   }
 
   function markStep(step) {

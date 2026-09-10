@@ -9,6 +9,7 @@
 3. 不在仓库、日志、截图或 Issue 中提交 API Key、邮箱令牌、个人路径或个人检测报告。
 4. 不新增依赖 Playwright 的测试；前端验收按 TESTING.md 手动执行。
 5. 不在共享提交中修改 `progress.html` 的字段契约，除非同时更新 `schemas/install-progress.schema.json`。
+6. 修改修复助手时，必须保留 loopback-only 绑定、随机令牌、Origin 校验、固定动作白名单和单任务锁。
 
 ## 本地检查
 

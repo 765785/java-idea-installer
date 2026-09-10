@@ -610,10 +610,48 @@ build_result_url() {
   fi
 }
 
+start_repair_bridge() {
+  local json="$1"
+  local python_bin
+  if [[ "${JAVA_SETUP_NO_UI:-0}" == "1" || "${JAVA_SETUP_NO_BRIDGE:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ -x /usr/bin/python3 ]]; then
+    python_bin="/usr/bin/python3"
+  else
+    python_bin="$(command -v python3 2>/dev/null || true)"
+  fi
+  if [[ -z "$python_bin" || ! -f "$TOOLKIT_ROOT/repair-bridge.py" ]]; then
+    return 0
+  fi
+  if ! printf '%s' "$json" | grep -Eq '"fixable":true|"errors":[1-9]'; then
+    return 0
+  fi
+
+  local port token log_file error_file
+  port="$(find_free_port 8790)"
+  [[ "$port" -ne 0 ]] || return 0
+  token="$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+  log_file="$REPORT_DIR/repair-bridge.log"
+  error_file="$REPORT_DIR/repair-bridge.error.log"
+  nohup "$python_bin" "$TOOLKIT_ROOT/repair-bridge.py" \
+    --toolkit-root "$TOOLKIT_ROOT" \
+    --port "$port" \
+    --token "$token" \
+    --progress-file "$PROGRESS_DIR/progress.json" \
+    --idle-minutes 30 \
+    >"$log_file" 2>"$error_file" &
+  sleep 0.6
+
+  if curl -fsS --max-time 2 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
+    printf '%s|%s' "$port" "$token"
+  fi
+}
+
 run_detect() {
   ensure_report_dirs
   log_info "正在检测 macOS、JDK、IDEA 和环境变量..."
-  local json result_path url exit_code=0
+  local json result_path url bridge bridge_port bridge_token exit_code=0
   json="$(detection_json)"
   result_path="$REPORT_DIR/detection_result.json"
   atomic_write "$result_path" "$json"
@@ -624,6 +662,12 @@ run_detect() {
 
   url="$(build_result_url "$json")"
   if [[ -n "$url" ]]; then
+    bridge="$(start_repair_bridge "$json" || true)"
+    if [[ -n "$bridge" ]]; then
+      IFS='|' read -r bridge_port bridge_token <<<"$bridge"
+      url="${url}&bridgePort=$bridge_port&bridgeToken=$bridge_token"
+      log_info "本地一键修复助手已启动，端口 $bridge_port。"
+    fi
     open "$url" >/dev/null 2>&1 || log_warn "无法自动打开网页，请手动上传检测结果。"
   else
     log_warn "结果过长，请把 JSON 文件拖到网页中。"
@@ -841,6 +885,15 @@ JAVA
   [[ "$result" -eq 0 ]]
 }
 
+fix_gatekeeper() {
+  local app removed=false
+  while IFS= read -r app; do
+    xattr -rd com.apple.quarantine "$app" 2>/dev/null || true
+    removed=true
+  done < <(find /Applications -maxdepth 1 -type d \( -iname 'IntelliJ IDEA CE*.app' -o -iname 'IntelliJ IDEA Community*.app' \) 2>/dev/null)
+  [[ "$removed" == true ]]
+}
+
 run_install() {
   open_progress_page install >/dev/null 2>&1 || true
   progress_init install \
@@ -896,6 +949,10 @@ run_install() {
     return 1
   fi
   progress_set_step 3 complete "Hello World 验证通过"
+  if [[ "${FIX_ALL:-0}" == "1" ]]; then
+    fix_gatekeeper || true
+    log_ok "已执行 macOS Gatekeeper 专项修复"
+  fi
 
   local result
   result="$(detection_json)"
@@ -903,6 +960,12 @@ run_install() {
   progress_write success 4 100 "Java 和 IDEA 已安装并验证完成" "$result"
   log_ok "安装完成，请回到网页查看最终报告。"
   return 0
+}
+
+run_fix_all() {
+  export JAVA_SETUP_NO_BRIDGE=1
+  log_info "正在执行全部修复：JDK、IDEA、环境变量和平台专项问题。"
+  run_install
 }
 
 run_fix() {
@@ -920,10 +983,7 @@ run_fix() {
       install_idea || return 1
       ;;
     gatekeeper)
-      local app
-      while IFS= read -r app; do
-        xattr -rd com.apple.quarantine "$app" 2>/dev/null || true
-      done < <(find /Applications -maxdepth 1 -type d -iname 'IntelliJ IDEA CE*.app' 2>/dev/null)
+      fix_gatekeeper || true
       ;;
     port)
       local port

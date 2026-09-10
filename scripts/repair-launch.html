@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+    <title>启动修复 - Java 一键搭建</title>
+    <style>
+      :root { color-scheme: light; --bg:#f5f8fb; --surface:#fff; --text:#172238; --muted:#5d6978; --line:#dbe3ea; --orange:#e9662b; --green:#178d79; --red:#c33c3c; font-family:"Microsoft YaHei UI","PingFang SC","Noto Sans CJK SC",sans-serif; }
+      * { box-sizing:border-box; }
+      body { min-height:100vh; margin:0; display:grid; place-items:center; padding:24px; background:var(--bg); color:var(--text); }
+      main { width:min(520px,100%); padding:30px; border:1px solid var(--line); border-radius:16px; background:var(--surface); box-shadow:0 20px 60px rgba(23,34,56,.12); text-align:center; }
+      .mark { display:grid; width:54px; height:54px; place-items:center; margin:0 auto 16px; border-radius:50%; background:#fff1e8; color:var(--orange); font-size:25px; font-weight:800; }
+      h1 { margin:0; font-size:23px; line-height:1.35; }
+      p { margin:10px 0 0; color:var(--muted); font-size:14px; line-height:1.7; }
+      .state { margin-top:20px; padding:12px; border-radius:10px; background:var(--bg); font-size:13px; }
+      .success .mark { background:#e7f7f3; color:var(--green); }
+      .error .mark { background:#fff0ef; color:var(--red); }
+      a { display:inline-flex; min-height:42px; align-items:center; justify-content:center; margin-top:18px; padding:0 16px; border-radius:9px; background:var(--text); color:var(--surface); font-size:13px; font-weight:720; text-decoration:none; }
+    </style>
+  </head>
+  <body>
+    <main id="panel">
+      <div class="mark" id="mark">...</div>
+      <h1 id="title">正在启动一键修复</h1>
+      <p id="message">请不要关闭窗口，正在验证本地修复助手。</p>
+      <div class="state" id="state">准备中</div>
+      <a id="returnLink" href="https://765785.github.io/java-idea-installer/" hidden>返回检测报告</a>
+    </main>
+    <script src="repair-launch.js"></script>
+  </body>
+</html>

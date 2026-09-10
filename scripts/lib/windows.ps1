@@ -6,6 +6,7 @@ param(
     [ValidateSet("java_home", "path", "multiple_jdks", "idea_repair", "vc_runtime", "port")]
     [string]$Fix,
 
+    [switch]$FixAll,
     [switch]$Resume,
     [switch]$DryRun,
     [switch]$KeepSettings,
@@ -222,7 +223,7 @@ function Initialize-ProgressPage {
 
 function Open-ProgressPage {
     param([string]$ProgressAction)
-    if ($env:JAVA_SETUP_NO_UI -eq "1") {
+    if ($FixAll -or $env:JAVA_SETUP_NO_UI -eq "1") {
         $reportDirectory = Get-ReportDirectory
         $script:ProgressDirectory = Join-Path $reportDirectory "progress"
         New-Item -ItemType Directory -Force -Path $script:ProgressDirectory | Out-Null
@@ -235,6 +236,94 @@ function Open-ProgressPage {
     } catch {
         Write-Log -Level "提醒" -Message "无法自动打开本地进度页：$($_.Exception.Message)"
         return ""
+    }
+}
+
+function Get-FreeLocalPort {
+    param(
+        [int]$StartPort = 8790,
+        [int]$Count = 30
+    )
+
+    for ($candidate = $StartPort; $candidate -lt ($StartPort + $Count); $candidate++) {
+        if (-not (Get-NetTCPConnection -State Listen -LocalPort $candidate -ErrorAction SilentlyContinue)) {
+            return $candidate
+        }
+    }
+    return 0
+}
+
+function Start-RepairBridge {
+    param([object]$DetectionResult)
+
+    if ($FixAll -or $env:JAVA_SETUP_NO_UI -eq "1") {
+        return $null
+    }
+
+    $fixableCount = @($DetectionResult.health | Where-Object { $_ -and $_.fixable -eq $true }).Count
+    if ($fixableCount -eq 0 -and $DetectionResult.summary.errors -eq 0) {
+        return $null
+    }
+
+    $toolkitRoot = Split-Path -Parent $PSScriptRoot
+    $bridgeScript = Join-Path $toolkitRoot "repair-bridge.ps1"
+    if (-not (Test-Path -LiteralPath $bridgeScript -PathType Leaf)) {
+        return $null
+    }
+
+    $port = Get-FreeLocalPort
+    if ($port -eq 0) {
+        return $null
+    }
+
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $bytes = New-Object byte[] 32
+        $rng.GetBytes($bytes)
+        $token = ([BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $rng.Dispose()
+    }
+
+    $reportDirectory = Get-ReportDirectory
+    $stdout = Join-Path $reportDirectory "repair-bridge.log"
+    $stderr = Join-Path $reportDirectory "repair-bridge.error.log"
+    $progressFile = Join-Path $reportDirectory "progress\progress.json"
+    $arguments = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", ('"{0}"' -f $bridgeScript),
+        "-ToolkitRoot", ('"{0}"' -f $toolkitRoot),
+        "-Port", [string]$port,
+        "-Token", $token,
+        "-ProgressFile", ('"{0}"' -f $progressFile),
+        "-IdleMinutes", "30"
+    )
+
+    try {
+        $process = Start-Process -FilePath "powershell.exe" `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+        Start-Sleep -Milliseconds 500
+        if ($process.HasExited) {
+            return $null
+        }
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 3
+        if ($health.status -ne "ok") {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            return $null
+        }
+        return [pscustomobject]@{
+            port = $port
+            token = $token
+        }
+    } catch {
+        Write-Log -Level "提醒" -Message "无法启动本地修复助手：$($_.Exception.Message)"
+        return $null
     }
 }
 
@@ -774,7 +863,13 @@ function Invoke-Detection {
             $json = $result | ConvertTo-Json -Depth 12 -Compress
             $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)).TrimEnd("=").Replace("+", "-").Replace("/", "_")
             if ($base64.Length -lt 90000) {
-                Start-Process ($OpenPage + "#result=" + $base64) | Out-Null
+                $bridge = Start-RepairBridge -DetectionResult $result
+                $hash = "result=$base64"
+                if ($bridge) {
+                    $hash += "&bridgePort=$($bridge.port)&bridgeToken=$($bridge.token)"
+                    Write-Log -Level "信息" -Message "本地一键修复助手已启动，端口 $($bridge.port)。"
+                }
+                Start-Process ($OpenPage + "#" + $hash) | Out-Null
             } else {
                 Write-Log -Level "提醒" -Message "结果过长，请把 JSON 文件拖到网页中。"
             }
@@ -1010,7 +1105,71 @@ public class HelloWorld {
     }
 }
 
+function Test-VCRuntime {
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+    )
+    foreach ($path in $paths) {
+        if (Test-Path $path) {
+            $runtime = Get-ItemProperty $path -ErrorAction SilentlyContinue
+            if ($runtime.Installed -eq 1) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Test-IdeaHealthy {
+    $idea = Get-IdeaInstallations |
+        Sort-Object { Get-PeVersion $_.version } -Descending |
+        Select-Object -First 1
+    if (-not $idea -or -not $idea.path) {
+        return $false
+    }
+    $executables = @(
+        (Join-Path $idea.path "bin\idea64.exe"),
+        (Join-Path $idea.path "bin\idea.exe")
+    )
+    foreach ($executable in $executables) {
+        if (Test-Path -LiteralPath $executable -PathType Leaf) {
+            try {
+                & $executable --version *> $null
+                return $LASTEXITCODE -eq 0
+            } catch {
+                return $false
+            }
+        }
+    }
+    return $false
+}
+
+function Invoke-PlatformFixes {
+    if (-not (Test-VCRuntime)) {
+        Write-Log -Level "信息" -Message "正在安装 VC++ Runtime"
+        $exitCode = Invoke-PrivilegedProcess -FilePath "winget.exe" -Arguments @(
+            "install", "--id", "Microsoft.VCRedist.2015+.x64", "-e", "--silent",
+            "--accept-package-agreements", "--accept-source-agreements",
+            "--disable-interactivity"
+        )
+        if ($exitCode -notin @(0, -1978335189)) {
+            throw "VC++ Runtime 安装失败，退出码 $exitCode"
+        }
+    } else {
+        Write-Log -Level "完成" -Message "VC++ Runtime 已安装"
+    }
+
+    if (-not (Test-IdeaHealthy)) {
+        Write-Log -Level "提醒" -Message "检测到 IDEA 可能损坏，正在重新安装。"
+        Uninstall-ByName -DisplayNamePattern "(?i)IntelliJ IDEA Community" | Out-Null
+        Install-Idea
+    }
+}
+
 function Invoke-Install {
+    param([switch]$FixAll)
+
     if ($Resume) {
         Write-Log -Level "信息" -Message "已启用断点续装：将复用已安装组件。"
     }
@@ -1078,6 +1237,9 @@ function Invoke-Install {
         Set-ProgressStep -Index 3 -Status "running" -Message "正在配置环境并执行冒烟测试"
         $selected = Select-JavaHome -Candidates (Get-JavaCandidates)
         Set-JavaEnvironment -Jdk $selected
+        if ($FixAll) {
+            Invoke-PlatformFixes
+        }
         Invoke-SmokeTest
         Set-ProgressStep -Index 3 -Status "complete" -Message "环境配置和 Hello World 验证完成"
 
@@ -1280,6 +1442,9 @@ try {
     switch ($Action) {
         "detect" { exit (Invoke-Detection) }
         "install" {
+            if ($FixAll) {
+                exit (Invoke-Install -FixAll)
+            }
             if ($Fix) {
                 exit (Invoke-Fix)
             }

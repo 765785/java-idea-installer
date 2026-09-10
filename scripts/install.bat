@@ -20,6 +20,11 @@ if /I "%~1"=="--fix" (
   shift
   goto :parse_args
 )
+if /I "%~1"=="--fix-all" (
+  set EXTRA_ARGS=%EXTRA_ARGS% -FixAll
+  shift
+  goto :parse_args
+)
 if /I "%~1"=="--resume" (
   set EXTRA_ARGS=%EXTRA_ARGS% -Resume
   shift

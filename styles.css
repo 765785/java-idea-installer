@@ -612,7 +612,6 @@ html[data-theme="dark"] .theme-icon-sun {
 
 .panel-heading h3,
 .report-summary h3,
-.report-next h3,
 .subsection-heading h3 {
   margin: 0;
   font-size: 18px;
@@ -621,7 +620,6 @@ html[data-theme="dark"] .theme-icon-sun {
 
 .panel-heading p,
 .report-summary p,
-.report-next p,
 .subsection-heading p {
   margin: 5px 0 0;
   color: var(--text-soft);
@@ -698,6 +696,20 @@ html[data-theme="dark"] .theme-icon-sun {
   color: var(--text-faint);
   font-size: 12px;
   text-align: center;
+}
+
+.download-advanced {
+  display: block;
+  margin-top: 10px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+
+.download-advanced:hover {
+  text-decoration: underline;
 }
 
 .divider {
@@ -985,6 +997,17 @@ html[data-theme="dark"] .theme-icon-sun {
   margin-bottom: 14px;
 }
 
+.health-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+}
+
+.health-heading .button {
+  flex: 0 0 auto;
+}
+
 .health-list {
   display: grid;
   gap: 10px;
@@ -1025,25 +1048,6 @@ html[data-theme="dark"] .theme-icon-sun {
 
 .text-button:hover {
   text-decoration: underline;
-}
-
-.small-button {
-  flex: 0 0 auto;
-  min-height: 38px;
-  padding: 0 13px;
-  font-size: 13px;
-}
-
-.report-next {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 22px;
-  margin-top: 22px;
-  padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--orange) 28%, var(--line));
-  border-radius: 12px;
-  background: var(--orange-soft);
 }
 
 .progress-section {
@@ -1296,41 +1300,49 @@ html[data-theme="dark"] .theme-icon-sun {
   margin-top: 26px;
 }
 
-.command-dialog > p:not(.section-kicker, .dialog-footnote) {
+.repair-dialog > p:not(.section-kicker) {
   color: var(--text-soft);
   font-size: 14px;
 }
 
-.command-box {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 18px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-soft);
+.repair-list {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.command-box code {
-  min-width: 0;
-  flex: 1;
-  overflow-wrap: anywhere;
+.repair-list li {
+  position: relative;
+  padding: 10px 12px 10px 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-soft);
   color: var(--text);
-  font-family: var(--font-mono);
   font-size: 13px;
 }
 
-.command-box .icon-button {
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+.repair-list li::before {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--orange);
+  content: "";
+  transform: translateY(-50%);
 }
 
-.dialog-footnote {
-  margin: 14px 0 0;
-  color: var(--text-faint);
+.repair-notice {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: var(--yellow-soft);
+  color: var(--yellow);
   font-size: 12px;
+  line-height: 1.65;
 }
 
 .toast {
@@ -1526,9 +1538,13 @@ html[data-theme="dark"] .theme-icon-sun {
   }
 
   .health-item,
-  .report-next {
+  .health-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .health-heading .button {
+    width: 100%;
   }
 
   .progress-header {
