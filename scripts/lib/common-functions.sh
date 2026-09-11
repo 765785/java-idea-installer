@@ -2,7 +2,8 @@
 
 set -o pipefail
 
-TOOL_VERSION="1.0.0"
+TOOL_VERSION="1.2.0"
+BRIDGE_PROTOCOL_VERSION="2"
 JDK_TARGET_VERSION="${JDK_TARGET_VERSION:-25}"
 JDK_DISTRIBUTION="${JDK_DISTRIBUTION:-temurin}"
 ENABLE_MIRROR_ACCELERATION="${ENABLE_MIRROR_ACCELERATION:-auto}"
@@ -624,6 +625,9 @@ start_repair_bridge() {
   if [[ -z "$python_bin" || ! -f "$TOOLKIT_ROOT/repair-bridge.py" ]]; then
     return 0
   fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f "$TOOLKIT_ROOT/repair-bridge.py" 2>/dev/null || true
+  fi
   if ! printf '%s' "$json" | grep -Eq '"fixable":true|"errors":[1-9]'; then
     return 0
   fi
@@ -666,7 +670,7 @@ run_detect() {
     bridge="$(start_repair_bridge "$json" || true)"
     if [[ -n "$bridge" ]]; then
       IFS='|' read -r bridge_port bridge_token <<<"$bridge"
-      url="${url}&bridgePort=$bridge_port&bridgeToken=$bridge_token"
+      url="${url}&bridgePort=$bridge_port&bridgeToken=$bridge_token&bridgeVersion=$BRIDGE_PROTOCOL_VERSION"
       log_info "本地一键修复助手已启动，端口 $bridge_port。"
     fi
     open "$url" >/dev/null 2>&1 || log_warn "无法自动打开网页，请手动上传检测结果。"

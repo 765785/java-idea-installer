@@ -236,8 +236,9 @@ while ($listener.IsListening) {
                 $reader.Dispose()
             }
             $action = if ($payload -and $payload.PSObject.Properties.Name -contains "action") { [string]$payload.action } else { "" }
+            $protocolVersion = if ($payload -and $payload.PSObject.Properties.Name -contains "protocolVersion") { [int]$payload.protocolVersion } else { 0 }
             $requestId = if ($payload -and $payload.PSObject.Properties.Name -contains "requestId") { [string]$payload.requestId } else { "" }
-            if ($action -ne "fix-all" -or $requestId -notmatch "^[a-fA-F0-9]{32}$") {
+            if ($action -ne "fix-all" -or $protocolVersion -ne 2 -or $requestId -notmatch "^[a-fA-F0-9]{32}$") {
                 Write-HttpJson -Context $context -StatusCode 400 -Body @{ status = "error"; message = "Invalid repair request." }
                 continue
             }
@@ -272,6 +273,9 @@ while ($listener.IsListening) {
 
         Write-HttpJson -Context $context -StatusCode 404 -Body @{ status = "error"; message = "Not found." }
     } catch {
+        try {
+            [Console]::Error.WriteLine("Repair bridge error: {0}" -f $_.Exception.Message)
+        } catch {}
         if ($context) {
             try {
                 Write-HttpJson -Context $context -StatusCode 500 -Body @{ status = "error"; message = "Repair bridge error." }

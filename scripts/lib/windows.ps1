@@ -19,7 +19,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 
-$script:ToolVersion = "1.0.0"
+$script:ToolVersion = "1.2.0"
+$script:BridgeProtocolVersion = 2
 $script:JdkTargetVersion = 25
 $script:JdkDistribution = "temurin"
 $script:MirrorMode = "auto"
@@ -271,6 +272,17 @@ function Start-RepairBridge {
         return $null
     }
 
+    $escapedRoot = [regex]::Escape($toolkitRoot)
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ProcessId -ne $PID -and
+            $_.CommandLine -match "repair-bridge\.ps1" -and
+            $_.CommandLine -match $escapedRoot
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+
     $port = Get-FreeLocalPort
     if ($port -eq 0) {
         return $null
@@ -369,7 +381,11 @@ function Get-JavaVersionAtPath {
         return $null
     }
 
+    $previousErrorAction = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 treats java's stderr as a terminating error
+        # when ErrorActionPreference is Stop, even though -version is successful.
+        $ErrorActionPreference = "Continue"
         $output = & $JavaPath -version 2>&1 | Out-String
         $match = [regex]::Match($output, '"([^"]+)"')
         if (-not $match.Success) {
@@ -382,6 +398,8 @@ function Get-JavaVersionAtPath {
         }
     } catch {
         return $null
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
     }
 }
 
@@ -448,16 +466,16 @@ function Get-JavaCandidates {
     $candidates = [System.Collections.Generic.List[object]]::new()
 
     if ($env:JAVA_HOME) {
-        Add-JavaCandidate -Candidates $candidates -Home $env:JAVA_HOME -Source "JAVA_HOME"
+        Add-JavaCandidate -Candidates $candidates -JavaHomePath $env:JAVA_HOME -Source "JAVA_HOME"
         if ((Split-Path -Leaf $env:JAVA_HOME.TrimEnd("\")) -ieq "bin") {
-            Add-JavaCandidate -Candidates $candidates -Home (Split-Path -Parent $env:JAVA_HOME.TrimEnd("\")) -Source "JAVA_HOME 上级目录"
+            Add-JavaCandidate -Candidates $candidates -JavaHomePath (Split-Path -Parent $env:JAVA_HOME.TrimEnd("\")) -Source "JAVA_HOME 上级目录"
         }
     }
 
     $javaCommand = Get-Command java.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($javaCommand) {
         $javaHomeFromPath = Convert-JavaExeToHome $javaCommand.Source
-        Add-JavaCandidate -Candidates $candidates -Home $javaHomeFromPath -Source "PATH"
+        Add-JavaCandidate -Candidates $candidates -JavaHomePath $javaHomeFromPath -Source "PATH"
     }
 
     $searchRoots = @(
@@ -470,7 +488,7 @@ function Get-JavaCandidates {
     foreach ($root in $searchRoots) {
         Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match "(?i)jdk|java" } |
-            ForEach-Object { Add-JavaCandidate -Candidates $candidates -Home $_.FullName -Source "安装目录" }
+            ForEach-Object { Add-JavaCandidate -Candidates $candidates -JavaHomePath $_.FullName -Source "安装目录" }
     }
 
     $registryRoots = @(
@@ -484,7 +502,7 @@ function Get-JavaCandidates {
         }
         Get-ChildItem $registryRoot -ErrorAction SilentlyContinue | ForEach-Object {
             $item = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-            Add-JavaCandidate -Candidates $candidates -Home $item.JavaHome -Source "注册表"
+            Add-JavaCandidate -Candidates $candidates -JavaHomePath $item.JavaHome -Source "注册表"
         }
     }
 
@@ -858,7 +876,7 @@ function Invoke-Detection {
     Write-Host "结果文件:  $resultPath"
     Write-Log -Level "完成" -Message "检测完成"
 
-    if ($env:JAVA_SETUP_NO_UI -eq "1") {
+    if ($env:JAVA_SETUP_NO_UI -eq "1" -or $FixAll) {
         Write-Log -Level "信息" -Message "已禁用界面回跳，结果文件可直接上传。"
     } else {
         try {
@@ -868,7 +886,7 @@ function Invoke-Detection {
                 $bridge = Start-RepairBridge -DetectionResult $result
                 $hash = "result=$base64"
                 if ($bridge) {
-                    $hash += "&bridgePort=$($bridge.port)&bridgeToken=$($bridge.token)"
+                    $hash += "&bridgePort=$($bridge.port)&bridgeToken=$($bridge.token)&bridgeVersion=$($script:BridgeProtocolVersion)"
                     Write-Log -Level "信息" -Message "本地一键修复助手已启动，端口 $($bridge.port)。"
                 }
                 Start-Process ($OpenPage + "#" + $hash) | Out-Null
@@ -1033,6 +1051,7 @@ function Install-Idea {
     $ideas = Get-IdeaInstallations
     $latest = Get-LatestIdeaRelease
     $selected = $ideas | Sort-Object { Get-PeVersion $_.version } -Descending | Select-Object -First 1
+    $fallbackInstallation = $selected
 
     if ($selected -and $latest.status -eq "ok" -and (Compare-VersionValue $selected.version $latest.version) -ge 0) {
         return
@@ -1046,12 +1065,26 @@ function Install-Idea {
         )
         if ($exitCode -in @(0, -1978335189)) {
             $installed = Get-IdeaInstallations | Sort-Object { Get-PeVersion $_.version } -Descending | Select-Object -First 1
+            if ($installed) {
+                $fallbackInstallation = $installed
+            }
             if ($installed -and $latest.status -eq "ok" -and (Compare-VersionValue $installed.version $latest.version) -ge 0) {
                 return
             }
         }
     }
-    Install-IdeaOfficial -LatestIdea $latest
+    try {
+        Install-IdeaOfficial -LatestIdea $latest
+    } catch {
+        $ideaPath = if ($fallbackInstallation) { [string]$fallbackInstallation.path } else { "" }
+        $idea64 = if ($ideaPath) { Join-Path $ideaPath "bin\idea64.exe" } else { "" }
+        $ideaExe = if ($ideaPath) { Join-Path $ideaPath "bin\idea.exe" } else { "" }
+        if ($ideaPath -and ((Test-Path -LiteralPath $idea64 -PathType Leaf) -or (Test-Path -LiteralPath $ideaExe -PathType Leaf))) {
+            Write-Log -Level "提醒" -Message "IDEA 官方升级失败，保留已安装的可用版本 $($fallbackInstallation.version)：$($_.Exception.Message)"
+            return
+        }
+        throw
+    }
 }
 
 function Set-JavaEnvironment {
@@ -1086,13 +1119,18 @@ function Invoke-SmokeTest {
     New-Item -ItemType Directory -Force -Path $temp | Out-Null
     try {
         $source = Join-Path $temp "HelloWorld.java"
-        @"
+        $sourceText = @"
 public class HelloWorld {
     public static void main(String[] args) {
         System.out.println("Hello World");
     }
 }
-"@ | Set-Content -LiteralPath $source -Encoding UTF8
+"@
+        [System.IO.File]::WriteAllText(
+            $source,
+            $sourceText,
+            [System.Text.UTF8Encoding]::new($false)
+        )
         $compileOutput = & javac $source 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "javac 编译失败：$compileOutput"
@@ -1245,7 +1283,9 @@ function Invoke-Install {
         Invoke-SmokeTest
         Set-ProgressStep -Index 3 -Status "complete" -Message "环境配置和 Hello World 验证完成"
 
-        $result = Invoke-Detection
+        Invoke-Detection | Out-Null
+        $resultPath = Join-Path (Get-ReportDirectory) "detection_result.json"
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
         Write-ProgressState -Status "success" -CurrentStep 4 -Percent 100 -Message "Java 和 IDEA 已安装并验证完成" -Result $result
         return 0
     } catch {

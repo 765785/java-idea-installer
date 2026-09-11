@@ -3,6 +3,7 @@
 
   const PUBLIC_ORIGIN = "https://765785.github.io";
   const params = new URLSearchParams(window.location.hash.slice(1));
+  const protocolVersion = params.get("protocolVersion") || "";
   const elements = {
     panel: document.querySelector("#panel"),
     mark: document.querySelector("#mark"),
@@ -46,6 +47,10 @@
       setFailure("修复请求参数不完整或已失效。");
       return;
     }
+    if (protocolVersion !== "2") {
+      setFailure("本地修复助手版本过旧，请重新运行最新版检测脚本。");
+      return;
+    }
 
     try {
       const response = await fetch("/api/repair-all", {
@@ -57,6 +62,7 @@
         },
         body: JSON.stringify({
           action: "fix-all",
+          protocolVersion: 2,
           requestId,
         }),
       });
@@ -72,9 +78,10 @@
       elements.state.textContent = `任务 ${result.jobId || ""}`;
       elements.returnLink.hidden = false;
 
-      if (window.opener && !window.opener.closed) {
-        const targetOrigin = new URL(returnUrl).origin;
-        window.opener.postMessage(
+      const targetOrigin = new URL(returnUrl).origin;
+      const hostWindow = window.opener || window.parent;
+      if (hostWindow && hostWindow !== window) {
+        hostWindow.postMessage(
           { type: "java-setup-repair-started", jobId: result.jobId || "" },
           targetOrigin,
         );
@@ -100,8 +107,9 @@
           elements.title.textContent = "修复正在执行";
           elements.message.textContent = "请保持终端窗口打开，修复完成后会自动更新。";
           elements.state.textContent = result.progress?.message || `任务 ${jobId || ""}`;
-          if (window.opener && !window.opener.closed && result.progress) {
-            window.opener.postMessage(
+          const hostWindow = window.opener || window.parent;
+          if (hostWindow && hostWindow !== window && result.progress) {
+            hostWindow.postMessage(
               { type: "java-setup-repair-progress", progress: result.progress },
               targetOrigin,
             );
@@ -118,9 +126,15 @@
             ? "请查看终端输出，返回报告页后可再次尝试。"
             : "最终检测报告会自动打开。";
           elements.state.textContent = failed ? "执行失败" : "全部步骤已完成";
-          if (window.opener && !window.opener.closed) {
-            window.opener.postMessage(
-              { type: "java-setup-repair-finished", status: result.status, jobId: result.jobId || "" },
+          const hostWindow = window.opener || window.parent;
+          if (hostWindow && hostWindow !== window) {
+            hostWindow.postMessage(
+              {
+                type: "java-setup-repair-finished",
+                status: result.status,
+                jobId: result.jobId || "",
+                progress: result.progress || null,
+              },
               targetOrigin,
             );
           }

@@ -172,7 +172,7 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
             return
 
         request_id = str(payload.get("requestId", ""))
-        if payload.get("action") != "fix-all" or not re_full_hex(request_id, 32):
+        if payload.get("action") != "fix-all" or payload.get("protocolVersion") != 2 or not re_full_hex(request_id, 32):
             self.send_json(400, {"status": "error", "message": "Invalid repair request."})
             return
 

@@ -17,6 +17,8 @@
     "gatekeeper",
     "vc_runtime",
   ]);
+  const TOOLKIT_VERSION = "1.2.0";
+  const BRIDGE_PROTOCOL_VERSION = "2";
 
   const state = {
     detectedOs: "unsupported",
@@ -25,7 +27,8 @@
     currentAction: "install",
     bridge: null,
     repairActions: [],
-    repairWindow: null,
+    repairFrame: null,
+    repairFrameWindow: null,
     repairOrigin: null,
     repairLaunchTimer: null,
   };
@@ -111,8 +114,15 @@
     const params = new URLSearchParams(hash);
     const port = Number.parseInt(params.get("bridgePort") || "", 10);
     const token = params.get("bridgeToken") || "";
-    if (Number.isInteger(port) && port >= 1024 && port <= 65535 && /^[a-f0-9]{64}$/i.test(token)) {
-      state.bridge = { port, token };
+    const version = params.get("bridgeVersion") || "";
+    if (
+      Number.isInteger(port)
+      && port >= 1024
+      && port <= 65535
+      && /^[a-f0-9]{64}$/i.test(token)
+      && version === BRIDGE_PROTOCOL_VERSION
+    ) {
+      state.bridge = { port, token, version };
       try {
         sessionStorage.setItem("java-setup-repair-bridge", JSON.stringify(state.bridge));
       } catch {
@@ -128,8 +138,9 @@
         && stored.port >= 1024
         && stored.port <= 65535
         && /^[a-f0-9]{64}$/i.test(stored?.token || "")
+        && stored?.version === BRIDGE_PROTOCOL_VERSION
       ) {
-        state.bridge = { port: stored.port, token: stored.token };
+        state.bridge = { port: stored.port, token: stored.token, version: stored.version };
       }
     } catch {
       try {
@@ -305,9 +316,9 @@
 
     const extension = os === "windows" ? "windows" : "macos";
     const launcherName = os === "windows" ? "detect.bat" : "detect.command";
-    elements.downloadPackage.href = `./scripts/${launcherName}`;
+    elements.downloadPackage.href = `./scripts/${launcherName}?v=${TOOLKIT_VERSION}`;
     elements.downloadPackage.setAttribute("download", launcherName);
-    elements.downloadFullPackage.href = `./downloads/java-idea-toolkit-${extension}.zip`;
+    elements.downloadFullPackage.href = `./downloads/java-idea-toolkit-${extension}.zip?v=${TOOLKIT_VERSION}`;
     elements.downloadFullPackage.setAttribute("download", `java-idea-toolkit-${extension}.zip`);
 
     elements.downloadMeta.textContent = os === "windows"
@@ -348,7 +359,7 @@
       return item;
     }));
     const launcherName = os === "windows" ? "detect.bat" : "detect.command";
-    elements.guideDownload.href = `./scripts/${launcherName}`;
+    elements.guideDownload.href = `./scripts/${launcherName}?v=${TOOLKIT_VERSION}`;
     elements.guideDownload.setAttribute("download", launcherName);
     elements.guideDialog.showModal();
   }
@@ -358,7 +369,7 @@
       return;
     }
     const launcher = document.createElement("a");
-    launcher.href = `./scripts/${os === "windows" ? "detect.bat" : "detect.command"}`;
+    launcher.href = `./scripts/${os === "windows" ? "detect.bat" : "detect.command"}?v=${TOOLKIT_VERSION}`;
     launcher.download = os === "windows" ? "detect.bat" : "detect.command";
     document.body.append(launcher);
     launcher.click();
@@ -651,7 +662,7 @@
   }
 
   function launchRepair() {
-    if (state.repairWindow) {
+    if (state.repairFrame) {
       return;
     }
     elements.repairDialog.close();
@@ -666,15 +677,18 @@
     const returnUrl = `${window.location.origin}${window.location.pathname}`;
     const fragment = new URLSearchParams({
       token: state.bridge.token,
+      protocolVersion: BRIDGE_PROTOCOL_VERSION,
       requestId: createRequestId(),
       return: returnUrl,
     });
     const launchUrl = `${bridgeOrigin}/launch#${fragment.toString()}`;
-    state.repairWindow = window.open(launchUrl, "java-setup-repair", "popup,width=560,height=420");
-    if (!state.repairWindow) {
-      showToast("浏览器阻止了修复窗口，请允许本站打开弹窗后重试。");
-      return;
-    }
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    frame.title = "Java repair bridge";
+    frame.src = launchUrl;
+    document.body.append(frame);
+    state.repairFrame = frame;
+    state.repairFrameWindow = frame.contentWindow;
     window.clearTimeout(state.repairLaunchTimer);
     state.repairLaunchTimer = window.setTimeout(() => {
       if (state.bridge) {
@@ -685,7 +699,9 @@
         }
         state.bridge = null;
         state.repairOrigin = null;
-        state.repairWindow = null;
+        state.repairFrame?.remove();
+        state.repairFrame = null;
+        state.repairFrameWindow = null;
         elements.progressSection.hidden = true;
         elements.reportContent.hidden = false;
         showToast("修复助手没有响应，请重新运行新版启动器后再试。");
@@ -694,15 +710,16 @@
 
     renderProgress({
       status: "running",
-      percent: 20,
-      message: "修复终端正在启动，请在终端窗口查看执行过程。",
+      percent: 5,
+      message: "正在启动修复终端，请保持窗口打开。",
       steps: [{ id: "fix-all", label: "执行全部修复", status: "running", estimatedSeconds: 300 }],
     });
     markStep("install");
+    elements.progressSection.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function handleRepairMessage(event) {
-    if (event.origin !== state.repairOrigin || event.source !== state.repairWindow) {
+    if (event.origin !== state.repairOrigin || event.source !== state.repairFrameWindow) {
       return;
     }
     if (event.data?.type === "java-setup-repair-started") {
@@ -729,15 +746,25 @@
     if (event.data?.type === "java-setup-repair-finished") {
       window.clearTimeout(state.repairLaunchTimer);
       const failed = event.data.status === "failed";
+      const finalResult = event.data.progress?.result;
+      state.repairOrigin = null;
+      state.repairFrame?.remove();
+      state.repairFrame = null;
+      state.repairFrameWindow = null;
+
+      if (!failed && finalResult && typeof finalResult === "object") {
+        acceptResult(finalResult, "修复助手");
+        showToast("修复完成，最终报告已更新。");
+        return;
+      }
+
       renderProgress({
         status: failed ? "failed" : "success",
-        percent: failed ? 70 : 100,
-        message: failed ? "修复未完成，请查看终端输出。" : "修复完成，正在打开最终报告。",
-        steps: [{ id: "fix-all", label: "执行全部修复", status: failed ? "failed" : "complete", estimatedSeconds: 300 }],
+        percent: failed ? event.data.progress?.percent : 100,
+        message: failed ? "修复未完成，请查看终端输出。" : "修复已完成，请重新运行检测确认结果。",
+        steps: event.data.progress?.steps || [{ id: "fix-all", label: "执行全部修复", status: failed ? "failed" : "complete", estimatedSeconds: 300 }],
       });
-      showToast(failed ? "修复未完成，请查看终端输出。" : "修复完成，正在打开最终报告。");
-      state.repairOrigin = null;
-      state.repairWindow = null;
+      showToast(failed ? "修复未完成，请查看终端输出。" : "修复已完成。");
     }
   }
 
@@ -811,7 +838,9 @@
     }
     state.bridge = null;
     state.repairOrigin = null;
-    state.repairWindow = null;
+    state.repairFrame?.remove();
+    state.repairFrame = null;
+    state.repairFrameWindow = null;
     history.replaceState(null, "", window.location.pathname + window.location.search);
     document.querySelector("#report").scrollIntoView({ behavior: "smooth", block: "start" });
   }

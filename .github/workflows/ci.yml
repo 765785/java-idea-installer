@@ -54,6 +54,16 @@ jobs:
           if ($process.ExitCode -notin @(0, 10, 20)) {
             throw "detect.bat returned unexpected exit code $($process.ExitCode)"
           }
+          $reportPath = Join-Path $env:USERPROFILE "Downloads\java-setup-reports\detection_result.json"
+          if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw "detect.bat did not create detection_result.json"
+          }
+          if (Get-Command java.exe -ErrorAction SilentlyContinue) {
+            $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            if ($report.components.jdk.status -eq "missing") {
+              throw "java.exe is available on PATH but detect.bat still reported JDK as missing"
+            }
+          }
 
   macos-static:
     name: macOS script checks
