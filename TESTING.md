@@ -15,8 +15,9 @@ pwsh -File tests/installer-contract.ps1
 - `index.html` 只暴露一个 `install-windows.bat` 下载入口。
 - `styles.css` 使用固定桌面画布且不包含移动端断点。
 - BAT 内嵌 PowerShell 能通过 PowerShell 5.1 语法解析。
-- `--dry-run` 能解析 Adoptium JDK 25 MSI。
-- `--dry-run` 能解析 JetBrains IDEA `2025.2.6.2` 和官方 SHA-256。
+- `--dry-run` 能识别已有 JDK 25 和 IDEA `2025.2.6.2`，并跳过下载。
+- `--dry-run --ignore-existing` 能解析 Adoptium JDK 25 MSI。
+- `--dry-run --ignore-existing` 能解析 JetBrains IDEA `2025.2.6.2` 和官方 SHA-256。
 - 旧检测、报告、修复桥、进度服务、macOS 和打包文件已删除。
 
 单独运行：
@@ -25,9 +26,16 @@ pwsh -File tests/installer-contract.ps1
 cmd /d /c "scripts\install-windows.bat --dry-run"
 ```
 
+忽略本机已有安装：
+
+```powershell
+cmd /d /c "scripts\install-windows.bat --dry-run --ignore-existing"
+```
+
 ## Windows 虚拟机验收
 
 - 在干净 Windows 11 x64 中选择 C 盘安装，确认路径为 `%USERPROFILE%\JavaDev`。
+- 在已安装兼容 JDK 25 和 IDEA `2025.2.6.2` 的机器上运行，确认不访问下载源、不重复安装，并复用原目录。
 - 在至少存在两个固定磁盘的虚拟机中选择 D 盘安装，确认内容位于 `D:\JavaDev`。
 - 确认 Java MSI 只请求一次 UAC，IDEA 安装不额外请求管理员权限。
 - 确认 `java -version` 和 `javac -version` 可用。

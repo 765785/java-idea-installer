@@ -89,8 +89,8 @@
           <li>
             <span>02</span>
             <div>
-              <h3>选择安装盘</h3>
-              <p>脚本列出可用磁盘，只选择一次目标盘符。</p>
+              <h3>复用或选择安装盘</h3>
+              <p>已有匹配版本会直接复用；缺少组件时才选择目标盘符。</p>
             </div>
           </li>
           <li>
@@ -116,7 +116,7 @@
               <path d="M17 10h1a3 3 0 0 1 0 6h-2M8 3v2M12 3v2"></path>
             </svg>
             <h3>最新 JDK 25 LTS</h3>
-            <p>从 Eclipse Adoptium 官方接口获取最新 JDK 25 补丁版，并校验 SHA-256。</p>
+            <p>优先复用已安装的 JDK 25；缺少时从 Eclipse Adoptium 获取并校验 SHA-256。</p>
           </article>
 
           <article>
@@ -142,6 +142,7 @@
           <h2 id="notes-title">运行前确认</h2>
           <ul>
             <li>浏览器下载后需要手动双击一次 BAT，浏览器不能直接运行本机程序。</li>
+            <li>检测到兼容的 JDK 25 和 IDEA 2025.2.6.2 时不会重复下载或安装。</li>
             <li>Java 是标准 MSI 安装，可能会触发一次管理员权限确认。</li>
             <li>安装位置只会在所选盘中，不会遍历或修改项目源码。</li>
             <li>卸载 Java 和 IDEA 可直接使用 Windows“已安装的应用”。</li>

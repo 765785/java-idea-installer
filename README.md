@@ -8,6 +8,8 @@
 - 在桌面创建 IDEA 快捷方式。
 - 验证 `java`、`javac` 和 IDEA 启动器，并自动打开 IDEA。
 
+安装前会先检查现有环境。已安装兼容的 JDK 25 和 IntelliJ IDEA Community 2025.2.6.2 时，直接复用，不下载或覆盖。
+
 网页只提供桌面布局，不做手机端适配。
 
 公开网址：[https://765785.github.io/java-idea-installer/](https://765785.github.io/java-idea-installer/)
@@ -16,7 +18,7 @@
 
 1. 打开网页并点击“下载 Windows 安装器”。
 2. 双击下载的 `install-windows.bat`。
-3. 从列表中选择安装盘。
+3. 已有兼容版本时直接复用；缺少组件时才选择安装盘。
 4. 接受一次 Java MSI 所需的管理员权限确认。
 5. 等待安装完成，IDE 会自动打开。
 
@@ -62,10 +64,16 @@
 pwsh -File tests/installer-contract.ps1
 ```
 
-只解析官方版本、盘符和 URL，不下载或安装：
+只检查现有环境，不下载或安装：
 
 ```powershell
 cmd /d /c "scripts\install-windows.bat --dry-run"
+```
+
+忽略本机已有安装，仅解析官方版本、盘符和 URL：
+
+```powershell
+cmd /d /c "scripts\install-windows.bat --dry-run --ignore-existing"
 ```
 
 本地预览静态网页：

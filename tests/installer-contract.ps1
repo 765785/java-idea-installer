@@ -39,12 +39,17 @@ $errors = $null
 ) | Out-Null
 Assert-True ($errors.Count -eq 0) "Embedded PowerShell has syntax errors: $($errors.Message -join '; ')"
 
-$dryRunOutput = & cmd.exe /d /c "`"$installerPath`" --dry-run" 2>&1 | Out-String
+$dryRunOutput = & cmd.exe /d /c "`"$installerPath`" --dry-run --ignore-existing" 2>&1 | Out-String
 $dryRunExitCode = $LASTEXITCODE
 Assert-True ($dryRunExitCode -eq 0) "--dry-run returned $dryRunExitCode. Output: $dryRunOutput"
 Assert-True ($dryRunOutput -match "api\.adoptium\.net") "--dry-run did not report the Adoptium source."
 Assert-True ($dryRunOutput -match "ideaIC-2025\.2\.6\.2\.exe") "--dry-run did not report the IDEA installer."
 Assert-True ($dryRunOutput -match "jdk-25") "--dry-run did not report the JDK target."
+
+$installerSource = Get-Content -LiteralPath $installerPath -Raw
+Assert-True ($installerSource -match "function Get-ExistingJavaInstallation") "installer does not detect an existing JDK."
+Assert-True ($installerSource -match "function Get-ExistingIdeaInstallation") "installer does not detect an existing IDEA."
+Assert-True ($installerSource -match "Existing compatible versions will be reused") "installer does not report component reuse."
 
 $indexPath = Join-Path $repoRoot "index.html"
 $indexHtml = Get-Content -LiteralPath $indexPath -Raw

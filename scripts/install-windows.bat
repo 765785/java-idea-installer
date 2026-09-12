@@ -15,6 +15,8 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $DryRun = @($args) -contains "--dry-run"
+$IgnoreExisting = @($args) -contains "--ignore-existing"
+$NoLaunch = @($args) -contains "--no-launch"
 $JdkMajorVersion = 25
 $IdeaVersion = "2025.2.6.2"
 $IdeaInstallerName = "ideaIC-$IdeaVersion.exe"
@@ -128,7 +130,30 @@ function Get-VerifiedFile {
         }
 
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -OutFile $Destination -TimeoutSec 900
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -OutFile $Destination -TimeoutSec 900
+            } catch {
+                $webRequestError = $_
+                if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
+                    throw
+                }
+
+                Write-Line "[INFO] PowerShell download failed, retrying with curl.exe."
+                & curl.exe `
+                    --fail `
+                    --location `
+                    --silent `
+                    --show-error `
+                    --retry 3 `
+                    --retry-delay 2 `
+                    --connect-timeout 30 `
+                    --output $Destination `
+                    $Uri
+                if ($LASTEXITCODE -ne 0) {
+                    throw "PowerShell and curl downloads failed. PowerShell error: $($webRequestError.Exception.Message)"
+                }
+            }
+
             $actual = Get-Sha256 -Path $Destination
             if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
                 throw "SHA-256 mismatch. Expected $ExpectedSha256, got $actual"
@@ -142,6 +167,204 @@ function Get-VerifiedFile {
     } | Out-Null
 
     return $Destination
+}
+
+function Normalize-JavaHome {
+    param([string]$Path)
+
+    if (-not $Path) {
+        return $null
+    }
+
+    $normalized = $Path.Trim().Trim('"').TrimEnd("\")
+    if ([IO.Path]::GetFileName($normalized) -ieq "bin") {
+        $normalized = Split-Path -Parent $normalized
+    }
+    return $normalized
+}
+
+function Get-JavaInstallationFromHome {
+    param([string]$JdkPath)
+
+    $normalized = Normalize-JavaHome -Path $JdkPath
+    if (-not $normalized) {
+        return $null
+    }
+
+    $javaExe = Join-Path $normalized "bin\java.exe"
+    $javacExe = Join-Path $normalized "bin\javac.exe"
+    if (-not (Test-Path -LiteralPath $javaExe -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $javacExe -PathType Leaf)) {
+        return $null
+    }
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $versionOutput = & $javaExe -version 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorAction
+    if ($exitCode -ne 0 -or $versionOutput -notmatch 'version "(?<version>\d+(?:\.\d+)*)"') {
+        return $null
+    }
+
+    $version = $Matches.version
+    $majorVersion = [int]($version -split '\.')[0]
+    if ($majorVersion -ne $JdkMajorVersion) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Name = "Eclipse Temurin JDK $version"
+        Home = $normalized
+        Version = $version
+    }
+}
+
+function Get-ExistingJavaInstallation {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $uninstallKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+
+    Get-ItemProperty $uninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match "Eclipse Temurin JDK.*$JdkMajorVersion" } |
+        ForEach-Object { $candidates.Add([string]$_.InstallLocation) }
+
+    @(
+        $env:JAVA_HOME,
+        [Environment]::GetEnvironmentVariable("JAVA_HOME", "User"),
+        [Environment]::GetEnvironmentVariable("JAVA_HOME", "Machine"),
+        (Join-Path $env:USERPROFILE "JavaDev\jdk-$JdkMajorVersion")
+    ) | ForEach-Object { $candidates.Add([string]$_) }
+
+    @(
+        (Join-Path $env:ProgramFiles "Eclipse Adoptium"),
+        (Join-Path $env:ProgramFiles "Java"),
+        (Join-Path ${env:ProgramFiles(x86)} "Eclipse Adoptium"),
+        (Join-Path ${env:ProgramFiles(x86)} "Java")
+    ) | ForEach-Object {
+        if (Test-Path -LiteralPath $_) {
+            Get-ChildItem -LiteralPath $_ -Directory -Filter "jdk-$JdkMajorVersion*" -ErrorAction SilentlyContinue |
+                ForEach-Object { $candidates.Add($_.FullName) }
+        }
+    }
+
+    foreach ($candidate in @($candidates | Where-Object { $_ } | Sort-Object -Unique)) {
+        $installation = Get-JavaInstallationFromHome -JdkPath $candidate
+        if ($installation) {
+            return $installation
+        }
+    }
+
+    return $null
+}
+
+function Get-IdeaInstallationFromHome {
+    param([string]$IdeaPath)
+
+    if (-not $IdeaPath) {
+        return $null
+    }
+
+    $normalized = $IdeaPath.Trim().Trim('"').TrimEnd("\")
+    if ([IO.Path]::GetFileName($normalized) -ieq "idea64.exe") {
+        $normalized = Split-Path -Parent (Split-Path -Parent $normalized)
+    } elseif ([IO.Path]::GetFileName($normalized) -ieq "bin") {
+        $normalized = Split-Path -Parent $normalized
+    }
+
+    $ideaExe = Join-Path $normalized "bin\idea64.exe"
+    $productInfoPath = Join-Path $normalized "product-info.json"
+    if (-not (Test-Path -LiteralPath $ideaExe -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $productInfoPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $productInfo = Get-Content -LiteralPath $productInfoPath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+
+    $version = [string]$productInfo.version
+    if ($version -ine $IdeaVersion) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Name = "IntelliJ IDEA Community $version"
+        Home = $normalized
+        Version = $version
+    }
+}
+
+function Get-ExistingIdeaInstallation {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $uninstallKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+
+    Get-ItemProperty $uninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match "IntelliJ IDEA Community Edition" } |
+        ForEach-Object { $candidates.Add([string]$_.InstallLocation) }
+
+    @(
+        (Join-Path $env:ProgramFiles "JetBrains\IntelliJ IDEA Community Edition $IdeaVersion"),
+        (Join-Path $env:LOCALAPPDATA "Programs\IntelliJ IDEA Community Edition $IdeaVersion"),
+        (Join-Path $env:USERPROFILE "JavaDev\idea-$IdeaVersion")
+    ) | ForEach-Object { $candidates.Add([string]$_) }
+
+    if (Test-Path -LiteralPath (Join-Path $env:ProgramFiles "JetBrains")) {
+        Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles "JetBrains") -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match "IntelliJ IDEA Community Edition" } |
+            ForEach-Object { $candidates.Add($_.FullName) }
+    }
+
+    foreach ($candidate in @($candidates | Where-Object { $_ } | Sort-Object -Unique)) {
+        $installation = Get-IdeaInstallationFromHome -IdeaPath $candidate
+        if ($installation) {
+            return $installation
+        }
+    }
+
+    return $null
+}
+
+function Set-JavaEnvironment {
+    param([string]$JdkHome)
+
+    $normalized = Normalize-JavaHome -Path $JdkHome
+    $javaBin = Join-Path $normalized "bin"
+    [Environment]::SetEnvironmentVariable("JAVA_HOME", $normalized, "User")
+    $env:JAVA_HOME = $normalized
+
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $effectivePath = @($machinePath, $userPath) -join ";"
+    $hasJavaBin = @($effectivePath -split ";" | Where-Object {
+        $_.Trim().TrimEnd("\") -ieq $javaBin.TrimEnd("\")
+    }).Count -gt 0
+
+    if (-not $hasJavaBin) {
+        $pathParts = @($userPath, $javaBin) |
+            Where-Object { $_ } |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ } |
+            ForEach-Object { $_.TrimEnd(";") }
+        $newUserPath = $pathParts -join ";"
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+    }
+
+    $currentPathEntries = @($env:Path -split ";" | Where-Object {
+        $_.Trim().TrimEnd("\") -ieq $javaBin.TrimEnd("\")
+    })
+    if ($currentPathEntries.Count -eq 0) {
+        $env:Path = "$javaBin;$env:Path"
+    }
 }
 
 function Get-FixedDriveChoices {
@@ -226,29 +449,6 @@ function Resolve-IdeaChecksum {
         throw "JetBrains checksum file does not contain a SHA-256 value."
     }
     return $match.Value.ToLowerInvariant()
-}
-
-function Read-ExistingChoice {
-    param(
-        [string]$Name,
-        [string]$Path
-    )
-
-    while ($true) {
-        Write-Line
-        Write-Line -Message "[INFO] $Name already exists at $Path" -Color Yellow
-        $answer = (Read-Host "Choose [S]kip, [R]einstall, or [C]ancel (default S)").Trim().ToUpperInvariant()
-        if (-not $answer -or $answer -eq "S") {
-            return "skip"
-        }
-        if ($answer -eq "R") {
-            return "reinstall"
-        }
-        if ($answer -eq "C") {
-            return "cancel"
-        }
-        Write-Line -Message "[WARN] Enter S, R, or C." -Color Yellow
-    }
 }
 
 function Ensure-RootDirectory {
@@ -391,9 +591,9 @@ function Test-JavaInstallation {
         throw "javac.exe verification failed."
     }
 
-    $machineJavaHome = [Environment]::GetEnvironmentVariable("JAVA_HOME", "Machine")
     $userJavaHome = [Environment]::GetEnvironmentVariable("JAVA_HOME", "User")
-    $effectiveJavaHome = if ($machineJavaHome) { $machineJavaHome } else { $userJavaHome }
+    $machineJavaHome = [Environment]::GetEnvironmentVariable("JAVA_HOME", "Machine")
+    $effectiveJavaHome = if ($userJavaHome) { $userJavaHome } else { $machineJavaHome }
     if (-not $effectiveJavaHome -or $effectiveJavaHome.TrimEnd("\") -ine $JdkHome.TrimEnd("\")) {
         throw "JAVA_HOME was not configured to $JdkHome."
     }
@@ -428,53 +628,71 @@ try {
         Write-Line "[INFO] Dry run: no files will be created and no installers will run."
     }
 
-    $drives = Get-FixedDriveChoices
-    $drive = Select-InstallDrive -Drives $drives
-    $root = Get-InstallRoot -DriveLetter $drive.DeviceId
-    $jdkHome = Join-Path $root "jdk-$JdkMajorVersion"
-    $ideaHome = Join-Path $root "idea-$IdeaVersion"
-    $downloadDirectory = Join-Path $root ".downloads"
-    $javaLog = Join-Path $root "java-install.log"
-    $ideaLog = Join-Path $root "idea-install.log"
-    $ideaConfig = Join-Path $root "idea-silent.config"
+    $root = $null
+    $downloadDirectory = $null
+    $javaLog = $null
+    $ideaLog = $null
+    $ideaConfig = $null
 
-    Write-Line "[INFO] Drive: $($drive.DeviceId)"
-    Write-Line "[INFO] Root:  $root"
+    $existingJava = if ($IgnoreExisting) { $null } else { Get-ExistingJavaInstallation }
+    $existingIdea = if ($IgnoreExisting) { $null } else { Get-ExistingIdeaInstallation }
+    $javaAction = if ($existingJava) { "use" } else { "install" }
+    $ideaAction = if ($existingIdea) { "use" } else { "install" }
+
+    if ($existingJava) {
+        Write-Line -Message "[INFO] Found $($existingJava.Name) at $($existingJava.Home)" -Color Green
+    }
+    if ($existingIdea) {
+        Write-Line -Message "[INFO] Found $($existingIdea.Name) at $($existingIdea.Home)" -Color Green
+    }
+    if ($javaAction -eq "use" -and $ideaAction -eq "use") {
+        Write-Line "[INFO] Existing compatible versions will be reused. No download is needed."
+    }
+
+    if ($javaAction -eq "install" -or $ideaAction -eq "install") {
+        $drives = Get-FixedDriveChoices
+        $drive = Select-InstallDrive -Drives $drives
+        $root = Get-InstallRoot -DriveLetter $drive.DeviceId
+        $downloadDirectory = Join-Path $root ".downloads"
+        $javaLog = Join-Path $root "java-install.log"
+        $ideaLog = Join-Path $root "idea-install.log"
+        $ideaConfig = Join-Path $root "idea-silent.config"
+
+        Write-Line "[INFO] Drive: $($drive.DeviceId)"
+        Write-Line "[INFO] Root:  $root"
+    }
+
+    $jdkHome = if ($existingJava) { $existingJava.Home } else { Join-Path $root "jdk-$JdkMajorVersion" }
+    $ideaHome = if ($existingIdea) { $existingIdea.Home } else { Join-Path $root "idea-$IdeaVersion" }
     Write-Line "[INFO] Java:  $jdkHome"
     Write-Line "[INFO] IDEA:  $ideaHome"
 
-    $javaPackage = Resolve-JavaPackage
-    $ideaChecksum = Resolve-IdeaChecksum
+    $javaPackage = if ($javaAction -eq "install") { Resolve-JavaPackage } else { $null }
+    $ideaChecksum = if ($ideaAction -eq "install") { Resolve-IdeaChecksum } else { $null }
 
     if ($DryRun) {
-        Write-Line "[DRY-RUN] Java version: $($javaPackage.Version)"
-        Write-Line "[DRY-RUN] Adoptium API: $($javaPackage.SourceUri)"
-        Write-Line "[DRY-RUN] Java MSI: $($javaPackage.Uri)"
-        Write-Line "[DRY-RUN] IDEA EXE: $IdeaUri"
-        Write-Line "[DRY-RUN] IDEA SHA-256: $ideaChecksum"
-        Write-Line "[DRY-RUN] Planned root: $root"
+        if ($javaAction -eq "use") {
+            Write-Line "[DRY-RUN] Reuse Java: $jdkHome"
+        } else {
+            Write-Line "[DRY-RUN] Java version: $($javaPackage.Version)"
+            Write-Line "[DRY-RUN] Adoptium API: $($javaPackage.SourceUri)"
+            Write-Line "[DRY-RUN] Java MSI: $($javaPackage.Uri)"
+        }
+        if ($ideaAction -eq "use") {
+            Write-Line "[DRY-RUN] Reuse IDEA: $ideaHome"
+        } else {
+            Write-Line "[DRY-RUN] IDEA EXE: $IdeaUri"
+            Write-Line "[DRY-RUN] IDEA SHA-256: $ideaChecksum"
+        }
+        if ($root) {
+            Write-Line "[DRY-RUN] Planned root: $root"
+        }
         exit 0
     }
 
-    Ensure-RootDirectory -Root $root
-    New-Item -ItemType Directory -Force -Path $downloadDirectory | Out-Null
-
-    $javaAction = "install"
-    $javaExe = Join-Path $jdkHome "bin\java.exe"
-    if (Test-Path -LiteralPath $javaExe -PathType Leaf) {
-        $javaAction = Read-ExistingChoice -Name "JDK $JdkMajorVersion" -Path $jdkHome
-    }
-    if ($javaAction -eq "cancel") {
-        exit 2
-    }
-
-    $ideaAction = "install"
-    $ideaExe = Join-Path $ideaHome "bin\idea64.exe"
-    if (Test-Path -LiteralPath $ideaExe -PathType Leaf) {
-        $ideaAction = Read-ExistingChoice -Name "IntelliJ IDEA $IdeaVersion" -Path $ideaHome
-    }
-    if ($ideaAction -eq "cancel") {
-        exit 2
+    if ($javaAction -eq "install" -or $ideaAction -eq "install") {
+        Ensure-RootDirectory -Root $root
+        New-Item -ItemType Directory -Force -Path $downloadDirectory | Out-Null
     }
 
     if ($javaAction -eq "install") {
@@ -499,16 +717,21 @@ try {
             -LogPath $ideaLog
     }
 
+    Set-JavaEnvironment -JdkHome $jdkHome
     Test-JavaInstallation -JdkHome $jdkHome
     New-IdeaDesktopShortcut -IdeaHome $ideaHome
-    Remove-DownloadDirectory -Root $root -DownloadDirectory $downloadDirectory
+    if ($root -and $downloadDirectory) {
+        Remove-DownloadDirectory -Root $root -DownloadDirectory $downloadDirectory
+    }
 
     Write-Section "Installation complete"
     Write-Line -Message "[OK] Java:  $jdkHome" -Color Green
     Write-Line -Message "[OK] IDEA:  $ideaHome" -Color Green
     Write-Line -Message "[OK] Desktop shortcut: IntelliJ IDEA $IdeaVersion.lnk" -Color Green
 
-    Start-Process -FilePath (Join-Path $ideaHome "bin\idea64.exe") | Out-Null
+    if (-not $NoLaunch) {
+        Start-Process -FilePath (Join-Path $ideaHome "bin\idea64.exe") | Out-Null
+    }
     exit 0
 } catch {
     Write-Line
