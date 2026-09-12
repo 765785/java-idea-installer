@@ -1,62 +1,54 @@
-# 手动测试清单
+# 测试清单
 
-本项目不使用 Playwright。前端功能在真实浏览器中手动核对，CI 只执行轻量静态检查，并且不会安装或卸载任何软件。
+项目只支持 Windows 10 / 11 x64，网页只提供桌面布局。不包含手机端适配、浏览器自动化、macOS 或环境检测流程。
 
-## 前端
+## 自动检查
 
-- 在 Windows 浏览器的普通与隐私窗口中打开站点，确认显示 `Windows 10 / 11`。
-- 在 macOS 或设备模拟器中使用 Safari/Chrome 访问，确认系统识别与架构提示合理。
-- 修改 User-Agent 或使用不支持的浏览器，确认显示“暂未支持自动安装”。
-- 切换深色/浅色主题并刷新页面，确认 `localStorage` 保持用户选择。
-- 依次拖动合法 JSON、选择非法 JSON、上传超过 1 MB 的文件，确认正常渲染或显示明确错误。
-- 使用带 `#result=<base64url>` 的地址打开页面，确认自动解析并滚动到检测报告。
-- 构造超长 `#result`，确认页面提示改用 JSON 上传。
-- 导入包含一个、两个和三个可修复问题的报告，确认只显示一个“一键修复全部”按钮。
-- 点击“一键修复全部”，确认弹出处理项、下载和权限提示；确认后不出现复制命令，而是启动隐藏的本地修复通道。
-- 确认点击后不会打开新标签页；本地助手通过隐藏通道连接，进度仍显示在当前报告页。
-- 修复过程中确认页面读取 `progress.json` 的百分比和步骤；脚本退出但未成功时，页面必须显示失败，不能永久停在初始百分比。
-- 模拟助手未运行，确认页面提示重新运行新版启动器，并且不显示任何终端命令。
-- 检查卸载说明与脚本实际行为：只有输入 `DELETE` 才继续彻底清理。
-- 在常见桌面浏览器宽度（1366px、1440px、1920px）检查：无横向溢出、无文字遮挡、无按钮换行错位、控件没有浏览器默认字号。
+在仓库根目录运行：
 
-## 本地进度页
+```powershell
+pwsh -File tests/installer-contract.ps1
+```
 
-- 设置 `JAVA_SETUP_NO_UI=0`，运行安装脚本的测试副本，确认系统默认浏览器自动打开进度页。
-- 确认 `progress.html` 每两秒请求 `progress.json`，进度、当前步骤和日志随 JSON 更新。
-- 安装完成后确认出现“返回网页查看最终报告”，URL 带 `#result=<base64url>`。
-- 停止本地服务后确认进度页显示连接提示，而不是空白或无限加载。
+该测试会检查：
 
-## Windows
+- `index.html` 只暴露一个 `install-windows.bat` 下载入口。
+- `styles.css` 使用固定桌面画布且不包含移动端断点。
+- BAT 内嵌 PowerShell 能通过 PowerShell 5.1 语法解析。
+- `--dry-run` 能解析 Adoptium JDK 25 MSI。
+- `--dry-run` 能解析 JetBrains IDEA `2025.2.6.2` 和官方 SHA-256。
+- 旧检测、报告、修复桥、进度服务、macOS 和打包文件已删除。
 
-- 在当前 PowerShell 中解析全部 `.ps1` 文件，确认没有语法错误。
-- 双击 `detect.bat`，确认中文/英文 Windows 均可生成 `detection_result.json`。
-- 把单独的 `detect.bat` 放到空文件夹后运行，确认它能下载、校验并解压工具包，然后生成报告。
-- 使用 winget 安装 JDK 25 后立即重新检测，确认报告显示 `Java: ok 25.x`，不能停在“JDK 安装后仍未检测到满足要求的版本”。
-- 模拟 IDEA 官方升级包下载中断，确认已安装且可运行的 IDEA 会被保留，修复流程继续完成环境变量和 Hello World 验证。
-- 在 Windows PowerShell 5.1 下运行 Hello World 验证，确认生成的 Java 源文件无 UTF-8 BOM，`javac` 不报“非法字符”。
-- 修复完成后确认 `progress.json.result` 是完整检测报告对象，而不是退出码；原网页应直接渲染最终报告。
-- 在检测结果页确认只出现一个“一键修复全部”，点击并确认后只打开一个终端，执行 `install.bat --fix-all`。
-- 验证重复点击返回同一任务、不会打开第二个终端；错误令牌和错误 Origin 返回 403。
-- 确认由助手启动的安装流程不会出现 `pause` 或“按任意键继续”，并会写入 `repair-job.exit` 供助手判断结束状态。
-- 验证修复助手只监听 `127.0.0.1`，空闲 30 分钟后退出。
-- 构造 `JAVA_HOME` 缺失、指向错误目录、低于 JDK 25、存在多个 JDK 四种情况，核对检测状态。
-- 断开网络后检测，确认网络字段为不可用或部分可用，且不会阻断本地 IDEA 识别。
-- 仅在虚拟机中运行安装测试，确认 UAC 只在实际安装步骤出现。
-- 检查卸载确认：输入不是 `DELETE` 时不得删除任何内容。
+单独运行：
 
-## macOS
+```powershell
+cmd /d /c "scripts\install-windows.bat --dry-run"
+```
 
-- 运行 `bash -n` 和 ShellCheck，确认无语法或常见 shell 问题。
-- 在 Intel 与 Apple 芯片至少各验证一次单文件 `detect.command`，确认自动下载、校验工具包并启动修复助手。
-- 点击“一键修复全部”后确认 Terminal 执行 `install.sh --fix-all`，并自动完成 Gatekeeper 修复。
-- 在没有 Homebrew 的环境确认 Adoptium 官方 pkg 兜底路径。
-- 确认 Homebrew 相关步骤在普通用户下运行，仅在需要写 `/Applications` 或安装 pkg 时请求 `sudo`。
-- 检查被 Gatekeeper 隔离的应用能通过“一键修复”移除 quarantine 属性。
-- 彻底卸载测试必须同时确认设置目录被删除、任何项目源码目录保持不变。
+## Windows 虚拟机验收
+
+- 在干净 Windows 11 x64 中选择 C 盘安装，确认路径为 `%USERPROFILE%\JavaDev`。
+- 在至少存在两个固定磁盘的虚拟机中选择 D 盘安装，确认内容位于 `D:\JavaDev`。
+- 确认 Java MSI 只请求一次 UAC，IDEA 安装不额外请求管理员权限。
+- 确认 `java -version` 和 `javac -version` 可用。
+- 确认机器级或用户级 `JAVA_HOME` 指向 `<安装根目录>\jdk-25`。
+- 确认 `PATH` 包含 `<安装根目录>\jdk-25\bin`。
+- 确认桌面存在 `IntelliJ IDEA 2025.2.6.2.lnk`。
+- 确认快捷方式指向 `<安装根目录>\idea-2025.2.6.2\bin\idea64.exe`。
+- 确认安装成功后 IDEA 自动打开。
+
+## 错误场景
+
+- 所有固定磁盘剩余空间都低于 6 GB 时给出明确错误。
+- 断网或下载失败时最多重试 4 次。
+- JDK 或 IDEA 的 SHA-256 不匹配时不得运行安装器。
+- 用户拒绝 UAC 时退出码为 `1`，并提示权限被取消。
+- 用户选择取消已有组件处理时退出码为 `2`。
+- IDEA 正在运行时停止安装并提示先关闭 IDEA。
+- 选择不可写盘符时提示选择其他盘。
+- 重复运行时分别验证 JDK 和 IDEA 的“跳过、重新安装、取消”。
 
 ## 发布验收
 
-- GitHub Actions 的 `Static checks` 和 `Deploy GitHub Pages` 全部成功。
-- 公开站点返回 HTTP 200，单文件启动器和两个 ZIP 均可下载；ZIP 包含 `repair-bridge`、修复启动页、脚本和 `lib`。
-- 仓库中不存在 API Key、个人路径、个人检测报告或生成工作流明文密钥。
-- `README.md` 截图与当前页面一致。
+- GitHub Pages 部署成功，网页按钮下载文件名是 `install-windows.bat`。
+- 下载文件可独立运行，不依赖仓库中的其他脚本或工具包。

@@ -25,14 +25,12 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-      - name: Build static site and download packages
+      - name: Build static site
         run: |
           set -euo pipefail
           rm -rf _site
-          mkdir -p _site/downloads
-          cp -R index.html styles.css app.js assets schemas scripts README.md TESTING.md CONTRIBUTING.md LICENSE _site/
-          chmod +x scripts/package-toolkits.sh
-          scripts/package-toolkits.sh "$PWD/_site/downloads"
+          mkdir -p _site
+          cp -R index.html styles.css assets scripts README.md LICENSE _site/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
@@ -48,4 +46,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+        uses: actions/deploy-pages@d6db90164ca5ed86f2b6aed7e0febac5b3c0c03e # v4

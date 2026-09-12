@@ -1,43 +1,35 @@
 # Contributing
 
-感谢参与改进 Java 一键搭建。
+感谢参与改进 Windows Java + IDEA 一键安装。
+
+## 架构约束
+
+1. 只支持 Windows 10 / 11 x64。
+2. 网页保持纯静态 HTML/CSS，只做桌面布局，不做手机端适配，不引入运行时 JavaScript、CDN 或后端接口。
+3. `scripts/install-windows.bat` 必须保持单文件自包含，不能依赖第二层下载器。
+4. 不恢复环境检测、检测报告、修复桥、进度服务、JSON 回传或 macOS 脚本。
+5. 只从 Adoptium 和 JetBrains 官方 HTTPS 地址下载安装包。
+6. 安装包必须校验官方 SHA-256，校验失败时不得执行安装器。
+7. 除 Java MSI 权限外，不扩大管理员权限范围；不静默结束用户进程。
 
 ## 提交前
 
-1. 保持网页继续使用原生 HTML/CSS/JavaScript，不引入运行时 CDN。
-2. 修改脚本接口时同步更新 README、Schema 和 TESTING。
-3. 不在仓库、日志、截图或 Issue 中提交 API Key、邮箱令牌、个人路径或个人检测报告。
-4. 不新增依赖 Playwright 的测试；前端验收按 TESTING.md 手动执行。
-5. 不在共享提交中修改 `progress.html` 的字段契约，除非同时更新 `schemas/install-progress.schema.json`。
-6. 修改修复助手时，必须保留 loopback-only 绑定、随机令牌、Origin 校验、固定动作白名单和单任务锁。
-
-## 本地检查
-
-```bash
-node --check app.js
-node --check scripts/progress.js
-bash -n scripts/*.sh scripts/*.command scripts/lib/common-functions.sh
-shellcheck -s bash scripts/*.sh scripts/*.command scripts/lib/common-functions.sh
-```
-
 ```powershell
-$tokens = $null
-$errors = $null
-Get-ChildItem scripts -Recurse -Filter *.ps1 | ForEach-Object {
-  [System.Management.Automation.Language.Parser]::ParseFile(
-    $_.FullName,
-    [ref]$tokens,
-    [ref]$errors
-  ) | Out-Null
-  if ($errors.Count -gt 0) { throw "$($_.FullName) has syntax errors" }
-}
+pwsh -File tests/installer-contract.ps1
 ```
+
+如果修改 BAT，额外确认：
+
+- 文件在 Windows PowerShell 5.1 下可解析。
+- `--dry-run` 返回码为 `0`。
+- 成功返回 `0`、失败返回 `1`、用户取消返回 `2`。
+- 下载目录位于所选安装根目录内，清理前必须验证路径边界。
 
 ## Pull Request
 
-请在 PR 中说明：
+请说明：
 
-- 修改的用户场景和平台。
-- 执行过哪些手动测试。
-- 是否改变 JSON 字段、退出码或下载包结构。
-- 是否涉及删除、环境变量或权限行为；如果涉及，必须写清回滚方式。
+- 修改了哪个固定版本或官方下载来源。
+- 是否改变安装路径、权限、环境变量或桌面快捷方式。
+- 执行过的 Windows 手动测试。
+- 是否需要升级失败回滚说明。
