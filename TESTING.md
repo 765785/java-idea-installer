@@ -24,8 +24,8 @@ installer contract checks passed
 - `styles.css` 使用固定桌面画布且不包含移动端断点。
 - BAT 内嵌 PowerShell 能通过 PowerShell 5.1 语法解析。
 - `--dry-run` 能识别已有 JDK 25 和 IDEA `2025.2.6.2`，并跳过下载。
-- `--dry-run --ignore-existing` 能解析 Adoptium JDK 25 MSI。
-- `--dry-run --ignore-existing` 能解析 JetBrains IDEA `2025.2.6.2` 和官方 SHA-256。
+- `--dry-run --ignore-existing` 能按顺序解析清华、南大和 GitHub 官方 JDK 25 MSI。
+- `--dry-run --ignore-existing` 能按顺序解析 JetBrains CDN、官方 IDEA `2025.2.6.2` 和官方 SHA-256。
 - 旧检测、报告、修复桥、进度服务、macOS 和打包文件已删除。
 
 ## 本机非破坏预检
@@ -165,6 +165,17 @@ echo %ERRORLEVEL%
 
 预期显示管理员权限被取消，退出码为 `1`，不安装 IDEA，也不创建桌面快捷方式。
 
+### 国内镜像回退
+
+在全新的 Sandbox 中，仅屏蔽清华镜像：
+
+```powershell
+$hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
+Add-Content -LiteralPath $hosts -Value "0.0.0.0 mirrors.tuna.tsinghua.edu.cn"
+```
+
+正常运行 BAT，预期先出现清华来源失败，然后自动切换到南京大学镜像并继续安装。再屏蔽南京大学镜像重复测试，预期回退到 GitHub 官方资产。
+
 ### SHA-256 校验失败
 
 在全新 Sandbox 中创建一个只用于测试的 BAT 副本，将 Java 下载地址替换为很小的官方响应，并强制使用错误校验值：
@@ -179,8 +190,10 @@ if ($javaAction -eq "install") {
     $resolved = Resolve-JavaPackage
     $javaPackage = [pscustomobject]@{
         Version = $resolved.Version
+        InstallerName = "test-source.bin"
         SourceUri = $resolved.SourceUri
         Uri = "https://api.adoptium.net/v3/info/available_releases"
+        Uris = @("https://api.adoptium.net/v3/info/available_releases")
         Sha256 = ("0" * 64)
     }
 } else {

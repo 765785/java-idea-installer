@@ -49,12 +49,12 @@
 - IDEA 按当前用户安装，不修改 PATH、右键菜单或文件关联。
 - 安装器不会卸载其他位置的 Java 或 IDEA。
 
-## 官方来源
+## 下载来源
 
-- JDK：Eclipse Adoptium API 返回的最新 JDK 25 Windows x64 MSI。
-- IDEA：JetBrains 官方 `ideaIC-2025.2.6.2.exe`。
+- JDK：优先使用清华大学和南京大学 Adoptium 镜像，失败时回退 Eclipse Adoptium 官方资产。
+- IDEA：优先使用 JetBrains CDN，失败时回退 JetBrains 官方下载地址。
 
-两个安装包都使用官方 SHA-256 校验。校验失败时不会运行安装器。
+安装器自动选择可用来源，用户不需要配置代理或 VPN。两个安装包都使用官方 SHA-256 校验，校验失败时不会运行安装器。
 
 ## 本地开发
 

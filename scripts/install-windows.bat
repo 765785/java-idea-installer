@@ -18,10 +18,18 @@ $DryRun = @($args) -contains "--dry-run"
 $IgnoreExisting = @($args) -contains "--ignore-existing"
 $NoLaunch = @($args) -contains "--no-launch"
 $JdkMajorVersion = 25
+$FallbackJavaVersion = "25.0.4.1+1"
+$FallbackJavaInstallerName = "OpenJDK25U-jdk_x64_windows_hotspot_25.0.4.1_1.msi"
+$FallbackJavaSha256 = "517b3590be43120c34c3891d09c97a1eddc12da982208c4f5adf1bdc1b5e3f15"
+$FallbackJavaReleaseTag = "jdk-25.0.4.1%2B1"
 $IdeaVersion = "2025.2.6.2"
 $IdeaInstallerName = "ideaIC-$IdeaVersion.exe"
-$IdeaUri = "https://download.jetbrains.com/idea/$IdeaInstallerName"
-$IdeaChecksumUri = "$IdeaUri.sha256"
+$IdeaUris = @(
+    "https://download-cdn.jetbrains.com/idea/$IdeaInstallerName",
+    "https://download.jetbrains.com/idea/$IdeaInstallerName"
+)
+$IdeaChecksumUri = "https://download.jetbrains.com/idea/$IdeaInstallerName.sha256"
+$FallbackIdeaSha256 = "8393c2c9ccbd8581d646f01f0b6f0e7f78e58ebbe5cd8cbd95f9e236518e9fe8"
 $MinimumFreeBytes = 6GB
 $MaximumAttempts = 4
 $Headers = @{ "User-Agent" = "JavaIdeaMinimalInstaller/1.0" }
@@ -118,55 +126,72 @@ function Get-RemoteText {
 
 function Get-VerifiedFile {
     param(
-        [string]$Uri,
+        [string[]]$Uri,
         [string]$Destination,
         [string]$ExpectedSha256,
         [string]$Label
     )
 
-    Invoke-WithRetry -Label $Label -Operation {
+    $sources = @($Uri | Where-Object { $_ } | Select-Object -Unique)
+    $failures = New-Object System.Collections.Generic.List[string]
+    $expected = $ExpectedSha256.ToLowerInvariant()
+
+    foreach ($source in $sources) {
         if (Test-Path -LiteralPath $Destination) {
-            Remove-Item -LiteralPath $Destination -Force
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
         }
 
         try {
-            try {
-                Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -OutFile $Destination -TimeoutSec 900
-            } catch {
-                $webRequestError = $_
-                if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
-                    throw
+            Invoke-WithRetry -Label "$Label from $source" -Operation {
+                if (Test-Path -LiteralPath $Destination) {
+                    Remove-Item -LiteralPath $Destination -Force
                 }
 
-                Write-Line "[INFO] PowerShell download failed, retrying with curl.exe."
-                & curl.exe `
-                    --fail `
-                    --location `
-                    --silent `
-                    --show-error `
-                    --retry 3 `
-                    --retry-delay 2 `
-                    --connect-timeout 30 `
-                    --output $Destination `
-                    $Uri
-                if ($LASTEXITCODE -ne 0) {
-                    throw "PowerShell and curl downloads failed. PowerShell error: $($webRequestError.Exception.Message)"
-                }
-            }
+                try {
+                    Invoke-WebRequest -UseBasicParsing -Uri $source -Headers $Headers -OutFile $Destination -TimeoutSec 900
+                } catch {
+                    $webRequestError = $_
+                    if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
+                        throw
+                    }
 
-            $actual = Get-Sha256 -Path $Destination
-            if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
-                throw "SHA-256 mismatch. Expected $ExpectedSha256, got $actual"
-            }
+                    Write-Line "[INFO] PowerShell download failed, retrying with curl.exe."
+                    & curl.exe `
+                        --fail `
+                        --location `
+                        --silent `
+                        --show-error `
+                        --retry 3 `
+                        --retry-delay 2 `
+                        --connect-timeout 30 `
+                        --output $Destination `
+                        $source
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "PowerShell and curl downloads failed. PowerShell error: $($webRequestError.Exception.Message)"
+                    }
+                }
+            } | Out-Null
         } catch {
             if (Test-Path -LiteralPath $Destination) {
                 Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
             }
-            throw
+            $failures.Add("$source : $($_.Exception.Message)")
+            Write-Line -Message "[WARN] Download source failed: $source" -Color Yellow
+            continue
         }
-    } | Out-Null
 
-    return $Destination
+        $actual = Get-Sha256 -Path $Destination
+        if ($actual -ne $expected) {
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            $failures.Add("$source : SHA-256 mismatch. Expected $expected, got $actual")
+            Write-Line -Message "[WARN] SHA-256 mismatch from $source. Trying the next source." -Color Yellow
+            continue
+        }
+
+        return $Destination
+    }
+
+    throw "$Label failed from all sources. $($failures -join ' | ')"
 }
 
 function Normalize-JavaHome {
@@ -422,33 +447,83 @@ function Get-InstallRoot {
     return Join-Path ($DriveLetter.TrimEnd("\") + "\") "JavaDev"
 }
 
-function Resolve-JavaPackage {
-    $uri = "https://api.adoptium.net/v3/assets/latest/$JdkMajorVersion/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse&installer_type=msi"
-    $response = Invoke-WithRetry -Label "Resolve latest JDK $JdkMajorVersion LTS" -Operation {
-        return Invoke-RestMethod -Uri $uri -Headers $Headers -TimeoutSec 30
-    }
+function New-JavaPackage {
+    param(
+        [string]$Version,
+        [string]$InstallerName,
+        [string]$OfficialUri,
+        [string]$Sha256,
+        [string]$ResolutionSource
+    )
 
-    $asset = @($response)[0]
-    $installer = $asset.binary.installer
-    if (-not $installer.link -or -not $installer.checksum) {
-        throw "Adoptium did not return a Windows MSI package."
-    }
+    $sources = @(
+        "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/$JdkMajorVersion/jdk/x64/windows/$InstallerName",
+        "https://mirrors.nju.edu.cn/adoptium/$JdkMajorVersion/jdk/x64/windows/$InstallerName",
+        $OfficialUri
+    ) | Where-Object { $_ } | Select-Object -Unique
 
     return [pscustomobject]@{
-        Version = [string]$asset.version.semver
-        SourceUri = $uri
-        Uri = [string]$installer.link
-        Sha256 = ([string]$installer.checksum).ToLowerInvariant()
+        Version = $Version
+        InstallerName = $InstallerName
+        SourceUri = $ResolutionSource
+        Uri = $OfficialUri
+        Uris = @($sources)
+        Sha256 = $Sha256.ToLowerInvariant()
+    }
+}
+
+function Resolve-JavaPackage {
+    $uri = "https://api.adoptium.net/v3/assets/latest/$JdkMajorVersion/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse&installer_type=msi"
+    try {
+        $response = Invoke-WithRetry -Label "Resolve latest JDK $JdkMajorVersion LTS" -Operation {
+            return Invoke-RestMethod -Uri $uri -Headers $Headers -TimeoutSec 30
+        }
+
+        $asset = @($response)[0]
+        $installer = $asset.binary.installer
+        if (-not $installer.link -or -not $installer.checksum) {
+            throw "Adoptium did not return a Windows MSI package."
+        }
+
+        $installerName = if ($installer.name) {
+            [string]$installer.name
+        } else {
+            [IO.Path]::GetFileName(([Uri]$installer.link).AbsolutePath)
+        }
+
+        return New-JavaPackage `
+            -Version ([string]$asset.version.semver) `
+            -InstallerName $installerName `
+            -OfficialUri ([string]$installer.link) `
+            -Sha256 ([string]$installer.checksum) `
+            -ResolutionSource $uri
+    } catch {
+        Write-Line -Message "[WARN] Adoptium API unavailable: $($_.Exception.Message)" -Color Yellow
+        Write-Line "[INFO] Using verified JDK $FallbackJavaVersion fallback."
+
+        $officialUri = "https://github.com/adoptium/temurin25-binaries/releases/download/$FallbackJavaReleaseTag/$FallbackJavaInstallerName"
+        return New-JavaPackage `
+            -Version $FallbackJavaVersion `
+            -InstallerName $FallbackJavaInstallerName `
+            -OfficialUri $officialUri `
+            -Sha256 $FallbackJavaSha256 `
+            -ResolutionSource "verified fallback"
     }
 }
 
 function Resolve-IdeaChecksum {
-    $content = Get-RemoteText -Uri $IdeaChecksumUri -Label "Resolve IDEA checksum"
-    $match = [regex]::Match($content, "[a-fA-F0-9]{64}")
-    if (-not $match.Success) {
-        throw "JetBrains checksum file does not contain a SHA-256 value."
+    try {
+        $content = Get-RemoteText -Uri $IdeaChecksumUri -Label "Resolve IDEA checksum"
+        $match = [regex]::Match($content, "[a-fA-F0-9]{64}")
+        if (-not $match.Success) {
+            throw "JetBrains checksum file does not contain a SHA-256 value."
+        }
+        return $match.Value.ToLowerInvariant()
+    } catch {
+        Write-Line -Message "[WARN] JetBrains checksum unavailable: $($_.Exception.Message)" -Color Yellow
+        Write-Line "[INFO] Using verified IDEA checksum fallback."
+        return $FallbackIdeaSha256
     }
-    return $match.Value.ToLowerInvariant()
 }
 
 function Ensure-RootDirectory {
@@ -469,10 +544,9 @@ function Install-Java {
         [string]$LogPath
     )
 
-    $installerName = [IO.Path]::GetFileName(([Uri]$Package.Uri).AbsolutePath)
-    $installerPath = Join-Path $DownloadDirectory $installerName
+    $installerPath = Join-Path $DownloadDirectory $Package.InstallerName
     Get-VerifiedFile `
-        -Uri $Package.Uri `
+        -Uri $Package.Uris `
         -Destination $installerPath `
         -ExpectedSha256 $Package.Sha256 `
         -Label "Download Java $($Package.Version)" | Out-Null
@@ -675,14 +749,18 @@ try {
             Write-Line "[DRY-RUN] Reuse Java: $jdkHome"
         } else {
             Write-Line "[DRY-RUN] Java version: $($javaPackage.Version)"
-            Write-Line "[DRY-RUN] Adoptium API: $($javaPackage.SourceUri)"
-            Write-Line "[DRY-RUN] Java MSI: $($javaPackage.Uri)"
+            Write-Line "[DRY-RUN] Java resolution: $($javaPackage.SourceUri)"
+            foreach ($source in $javaPackage.Uris) {
+                Write-Line "[DRY-RUN] Java source: $source"
+            }
         }
         if ($ideaAction -eq "use") {
             Write-Line "[DRY-RUN] Reuse IDEA: $ideaHome"
         } else {
-            Write-Line "[DRY-RUN] IDEA EXE: $IdeaUri"
             Write-Line "[DRY-RUN] IDEA SHA-256: $ideaChecksum"
+            foreach ($source in $IdeaUris) {
+                Write-Line "[DRY-RUN] IDEA source: $source"
+            }
         }
         if ($root) {
             Write-Line "[DRY-RUN] Planned root: $root"
@@ -706,7 +784,7 @@ try {
     if ($ideaAction -eq "install") {
         $ideaInstallerPath = Join-Path $downloadDirectory $IdeaInstallerName
         Get-VerifiedFile `
-            -Uri $IdeaUri `
+            -Uri $IdeaUris `
             -Destination $ideaInstallerPath `
             -ExpectedSha256 $ideaChecksum `
             -Label "Download IntelliJ IDEA $IdeaVersion" | Out-Null
