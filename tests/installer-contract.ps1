@@ -50,6 +50,8 @@ Assert-True ($dryRunOutput -match "mirrors\.nju\.edu\.cn/adoptium/25/jdk/x64/win
 Assert-True ($dryRunOutput -match "github\.com/adoptium/temurin25-binaries") "--dry-run did not report the official GitHub Java fallback."
 Assert-True ($dryRunOutput -match "download-cdn\.jetbrains\.com/idea/ideaIC-2025\.2\.6\.2\.exe") "--dry-run did not report the JetBrains CDN."
 Assert-True ($dryRunOutput -match "download\.jetbrains\.com/idea/ideaIC-2025\.2\.6\.2\.exe") "--dry-run did not report the official JetBrains fallback."
+Assert-True ($dryRunOutput -match "\[DRY-RUN\] Java size:") "--dry-run did not report the Java download size."
+Assert-True ($dryRunOutput -match "\[DRY-RUN\] IDEA size:") "--dry-run did not report the IDEA download size."
 
 $tunaIndex = $dryRunOutput.IndexOf("https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/x64/windows/", [StringComparison]::Ordinal)
 $njuIndex = $dryRunOutput.IndexOf("https://mirrors.nju.edu.cn/adoptium/25/jdk/x64/windows/", [StringComparison]::Ordinal)
@@ -66,6 +68,9 @@ Assert-True ($installerSource -match "function Get-ExistingIdeaInstallation") "i
 Assert-True ($installerSource -match "Existing compatible versions will be reused") "installer does not report component reuse."
 Assert-True ($installerSource -match "517b3590be43120c34c3891d09c97a1eddc12da982208c4f5adf1bdc1b5e3f15") "installer is missing the pinned Java checksum."
 Assert-True ($installerSource -match "8393c2c9ccbd8581d646f01f0b6f0e7f78e58ebbe5cd8cbd95f9e236518e9fe8") "installer is missing the pinned IDEA checksum."
+Assert-True ($installerSource -match "Enter drive number or letter") "installer prompt does not accept a drive number or letter."
+Assert-True ($installerSource -match "--progress-bar") "installer download does not show a progress bar."
+Assert-True ($installerSource -match "Keep this window open while downloading") "installer does not tell the user to keep the window open."
 
 $indexPath = Join-Path $repoRoot "index.html"
 $indexHtml = Get-Content -LiteralPath $indexPath -Raw
@@ -74,6 +79,9 @@ Assert-True ($downloadLinks.Count -eq 1) "index.html must contain exactly one in
 Assert-True ($indexHtml -notmatch "app\.js") "index.html still loads the removed app.js."
 Assert-True ($indexHtml -notmatch "检测报告") "index.html still contains the old detection-report UI."
 Assert-True ($indexHtml -notmatch "macOS") "index.html still contains the removed macOS entry."
+Assert-True ($indexHtml -match "更多信息") "index.html does not explain the SmartScreen warning."
+Assert-True ($indexHtml -match "约 1\.1 GB") "index.html does not explain the total download size."
+Assert-True ($indexHtml -match "不要关闭黑色安装窗口") "index.html does not explain that the installer window must stay open."
 
 $stylesPath = Join-Path $repoRoot "styles.css"
 $styles = Get-Content -LiteralPath $stylesPath -Raw

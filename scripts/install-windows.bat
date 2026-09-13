@@ -21,9 +21,11 @@ $JdkMajorVersion = 25
 $FallbackJavaVersion = "25.0.4.1+1"
 $FallbackJavaInstallerName = "OpenJDK25U-jdk_x64_windows_hotspot_25.0.4.1_1.msi"
 $FallbackJavaSha256 = "517b3590be43120c34c3891d09c97a1eddc12da982208c4f5adf1bdc1b5e3f15"
+$FallbackJavaSizeBytes = 115998720
 $FallbackJavaReleaseTag = "jdk-25.0.4.1%2B1"
 $IdeaVersion = "2025.2.6.2"
 $IdeaInstallerName = "ideaIC-$IdeaVersion.exe"
+$IdeaInstallerSizeBytes = 993349720
 $IdeaUris = @(
     "https://download-cdn.jetbrains.com/idea/$IdeaInstallerName",
     "https://download.jetbrains.com/idea/$IdeaInstallerName"
@@ -129,14 +131,21 @@ function Get-VerifiedFile {
         [string[]]$Uri,
         [string]$Destination,
         [string]$ExpectedSha256,
+        [long]$ExpectedSize,
         [string]$Label
     )
 
     $sources = @($Uri | Where-Object { $_ } | Select-Object -Unique)
     $failures = New-Object System.Collections.Generic.List[string]
     $expected = $ExpectedSha256.ToLowerInvariant()
+    $sourceNumber = 0
 
     foreach ($source in $sources) {
+        $sourceNumber++
+        $sizeText = if ($ExpectedSize -gt 0) { Format-Size $ExpectedSize } else { "unknown size" }
+        Write-Line "[INFO] Source $sourceNumber/$($sources.Count): $source"
+        Write-Line "[INFO] File size: $sizeText. Keep this window open while downloading."
+
         if (Test-Path -LiteralPath $Destination) {
             Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
         }
@@ -147,28 +156,22 @@ function Get-VerifiedFile {
                     Remove-Item -LiteralPath $Destination -Force
                 }
 
-                try {
-                    Invoke-WebRequest -UseBasicParsing -Uri $source -Headers $Headers -OutFile $Destination -TimeoutSec 900
-                } catch {
-                    $webRequestError = $_
-                    if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
-                        throw
-                    }
-
-                    Write-Line "[INFO] PowerShell download failed, retrying with curl.exe."
+                if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
                     & curl.exe `
                         --fail `
                         --location `
-                        --silent `
-                        --show-error `
                         --retry 3 `
                         --retry-delay 2 `
                         --connect-timeout 30 `
+                        --progress-bar `
                         --output $Destination `
                         $source
                     if ($LASTEXITCODE -ne 0) {
-                        throw "PowerShell and curl downloads failed. PowerShell error: $($webRequestError.Exception.Message)"
+                        throw "curl.exe download failed with exit code $LASTEXITCODE."
                     }
+                } else {
+                    Write-Line "[INFO] curl.exe is unavailable. Downloading with PowerShell. Please wait."
+                    Invoke-WebRequest -UseBasicParsing -Uri $source -Headers $Headers -OutFile $Destination -TimeoutSec 900
                 }
             } | Out-Null
         } catch {
@@ -178,6 +181,22 @@ function Get-VerifiedFile {
             $failures.Add("$source : $($_.Exception.Message)")
             Write-Line -Message "[WARN] Download source failed: $source" -Color Yellow
             continue
+        }
+
+        if (-not (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+            $failures.Add("$source : downloaded file is missing.")
+            Write-Line -Message "[WARN] Downloaded file is missing from $source. Trying the next source." -Color Yellow
+            continue
+        }
+
+        if ($ExpectedSize -gt 0) {
+            $actualSize = (Get-Item -LiteralPath $Destination).Length
+            if ($actualSize -ne $ExpectedSize) {
+                Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+                $failures.Add("$source : size mismatch. Expected $ExpectedSize bytes, got $actualSize bytes.")
+                Write-Line -Message "[WARN] File size mismatch from $source. Trying the next source." -Color Yellow
+                continue
+            }
         }
 
         $actual = Get-Sha256 -Path $Destination
@@ -427,13 +446,24 @@ function Select-InstallDrive {
             Write-Line ("[{0}] {1}{2} - {3} free" -f ($index + 1), $drive.DeviceId, $name, (Format-Size $drive.FreeSpace))
         }
 
-        $answer = (Read-Host "Enter drive letter (for example D)").Trim().TrimEnd(":")
+        $answer = (Read-Host "Enter drive number or letter (press Enter for 1)").Trim().TrimEnd(":")
+        if (-not $answer) {
+            return $Drives[0]
+        }
+
+        $driveNumber = 0
+        if ([int]::TryParse($answer, [ref]$driveNumber) -and
+            $driveNumber -ge 1 -and
+            $driveNumber -le $Drives.Count) {
+            return $Drives[$driveNumber - 1]
+        }
+
         $selected = $Drives | Where-Object { $_.DeviceId.TrimEnd(":") -ieq $answer } | Select-Object -First 1
         if ($selected) {
             return $selected
         }
 
-        Write-Line -Message "[WARN] Invalid drive. Choose one of the listed letters." -Color Yellow
+        Write-Line -Message "[WARN] Invalid choice. Enter a listed number or drive letter." -Color Yellow
     }
 }
 
@@ -453,6 +483,7 @@ function New-JavaPackage {
         [string]$InstallerName,
         [string]$OfficialUri,
         [string]$Sha256,
+        [long]$SizeBytes,
         [string]$ResolutionSource
     )
 
@@ -469,6 +500,7 @@ function New-JavaPackage {
         Uri = $OfficialUri
         Uris = @($sources)
         Sha256 = $Sha256.ToLowerInvariant()
+        Size = $SizeBytes
     }
 }
 
@@ -496,6 +528,7 @@ function Resolve-JavaPackage {
             -InstallerName $installerName `
             -OfficialUri ([string]$installer.link) `
             -Sha256 ([string]$installer.checksum) `
+            -SizeBytes ([long]$installer.size) `
             -ResolutionSource $uri
     } catch {
         Write-Line -Message "[WARN] Adoptium API unavailable: $($_.Exception.Message)" -Color Yellow
@@ -507,6 +540,7 @@ function Resolve-JavaPackage {
             -InstallerName $FallbackJavaInstallerName `
             -OfficialUri $officialUri `
             -Sha256 $FallbackJavaSha256 `
+            -SizeBytes $FallbackJavaSizeBytes `
             -ResolutionSource "verified fallback"
     }
 }
@@ -549,6 +583,7 @@ function Install-Java {
         -Uri $Package.Uris `
         -Destination $installerPath `
         -ExpectedSha256 $Package.Sha256 `
+        -ExpectedSize $Package.Size `
         -Label "Download Java $($Package.Version)" | Out-Null
 
     $arguments = @(
@@ -591,6 +626,8 @@ function Install-Idea {
     if (Get-Process -Name "idea64", "idea" -ErrorAction SilentlyContinue) {
         throw "IntelliJ IDEA is running. Close it and run the installer again."
     }
+
+    Write-Line "[INFO] Installing IntelliJ IDEA. This may take several minutes."
 
     $config = @"
 mode=user
@@ -749,6 +786,7 @@ try {
             Write-Line "[DRY-RUN] Reuse Java: $jdkHome"
         } else {
             Write-Line "[DRY-RUN] Java version: $($javaPackage.Version)"
+            Write-Line "[DRY-RUN] Java size: $(Format-Size $javaPackage.Size)"
             Write-Line "[DRY-RUN] Java resolution: $($javaPackage.SourceUri)"
             foreach ($source in $javaPackage.Uris) {
                 Write-Line "[DRY-RUN] Java source: $source"
@@ -758,6 +796,7 @@ try {
             Write-Line "[DRY-RUN] Reuse IDEA: $ideaHome"
         } else {
             Write-Line "[DRY-RUN] IDEA SHA-256: $ideaChecksum"
+            Write-Line "[DRY-RUN] IDEA size: $(Format-Size $IdeaInstallerSizeBytes)"
             foreach ($source in $IdeaUris) {
                 Write-Line "[DRY-RUN] IDEA source: $source"
             }
@@ -787,6 +826,7 @@ try {
             -Uri $IdeaUris `
             -Destination $ideaInstallerPath `
             -ExpectedSha256 $ideaChecksum `
+            -ExpectedSize $IdeaInstallerSizeBytes `
             -Label "Download IntelliJ IDEA $IdeaVersion" | Out-Null
         Install-Idea `
             -InstallerPath $ideaInstallerPath `
@@ -806,6 +846,7 @@ try {
     Write-Line -Message "[OK] Java:  $jdkHome" -Color Green
     Write-Line -Message "[OK] IDEA:  $ideaHome" -Color Green
     Write-Line -Message "[OK] Desktop shortcut: IntelliJ IDEA $IdeaVersion.lnk" -Color Green
+    Write-Line "[INFO] Open a new Command Prompt and run: java -version"
 
     if (-not $NoLaunch) {
         Start-Process -FilePath (Join-Path $ideaHome "bin\idea64.exe") | Out-Null
@@ -814,6 +855,7 @@ try {
 } catch {
     Write-Line
     Write-Line -Message "[ERROR] $($_.Exception.Message)" -Color Red
+    Write-Line -Message "[INFO] Installation did not complete. Keep this window open and review the error above." -Color Yellow
     if ($root) {
         Write-Line -Message "[INFO] Failed downloads and logs are kept under $root." -Color Yellow
     }
