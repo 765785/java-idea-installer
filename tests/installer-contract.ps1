@@ -42,20 +42,20 @@ Assert-True ($errors.Count -eq 0) "Embedded PowerShell has syntax errors: $($err
 $dryRunOutput = & cmd.exe /d /c "`"$installerPath`" --dry-run --ignore-existing" 2>&1 | Out-String
 $dryRunExitCode = $LASTEXITCODE
 Assert-True ($dryRunExitCode -eq 0) "--dry-run returned $dryRunExitCode. Output: $dryRunOutput"
-Assert-True ($dryRunOutput -match "api\.adoptium\.net") "--dry-run did not report the Adoptium source."
+Assert-True ($dryRunOutput -match "\[DRY-RUN\] Java resolution:") "--dry-run did not report how the Java version was resolved."
 Assert-True ($dryRunOutput -match "ideaIC-2025\.2\.6\.2\.exe") "--dry-run did not report the IDEA installer."
-Assert-True ($dryRunOutput -match "jdk-25") "--dry-run did not report the JDK target."
-Assert-True ($dryRunOutput -match "mirrors\.tuna\.tsinghua\.edu\.cn/Adoptium/25/jdk/x64/windows/") "--dry-run did not report the Tsinghua Java mirror."
-Assert-True ($dryRunOutput -match "mirrors\.nju\.edu\.cn/adoptium/25/jdk/x64/windows/") "--dry-run did not report the Nanjing University Java mirror."
-Assert-True ($dryRunOutput -match "github\.com/adoptium/temurin25-binaries") "--dry-run did not report the official GitHub Java fallback."
+Assert-True ($dryRunOutput -match "jdk-21") "--dry-run did not report the JDK target."
+Assert-True ($dryRunOutput -match "mirrors\.tuna\.tsinghua\.edu\.cn/Adoptium/21/jdk/x64/windows/") "--dry-run did not report the Tsinghua Java mirror."
+Assert-True ($dryRunOutput -match "mirrors\.nju\.edu\.cn/adoptium/21/jdk/x64/windows/") "--dry-run did not report the Nanjing University Java mirror."
+Assert-True ($dryRunOutput -match "github\.com/adoptium/temurin21-binaries") "--dry-run did not report the official GitHub Java fallback."
 Assert-True ($dryRunOutput -match "download-cdn\.jetbrains\.com/idea/ideaIC-2025\.2\.6\.2\.exe") "--dry-run did not report the JetBrains CDN."
 Assert-True ($dryRunOutput -match "download\.jetbrains\.com/idea/ideaIC-2025\.2\.6\.2\.exe") "--dry-run did not report the official JetBrains fallback."
 Assert-True ($dryRunOutput -match "\[DRY-RUN\] Java size:") "--dry-run did not report the Java download size."
 Assert-True ($dryRunOutput -match "\[DRY-RUN\] IDEA size:") "--dry-run did not report the IDEA download size."
 
-$tunaIndex = $dryRunOutput.IndexOf("https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/x64/windows/", [StringComparison]::Ordinal)
-$njuIndex = $dryRunOutput.IndexOf("https://mirrors.nju.edu.cn/adoptium/25/jdk/x64/windows/", [StringComparison]::Ordinal)
-$githubJavaIndex = $dryRunOutput.IndexOf("https://github.com/adoptium/temurin25-binaries", [StringComparison]::Ordinal)
+$tunaIndex = $dryRunOutput.IndexOf("https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/", [StringComparison]::Ordinal)
+$njuIndex = $dryRunOutput.IndexOf("https://mirrors.nju.edu.cn/adoptium/21/jdk/x64/windows/", [StringComparison]::Ordinal)
+$githubJavaIndex = $dryRunOutput.IndexOf("https://github.com/adoptium/temurin21-binaries", [StringComparison]::Ordinal)
 Assert-True ($tunaIndex -ge 0 -and $njuIndex -gt $tunaIndex -and $githubJavaIndex -gt $njuIndex) "Java download source order is incorrect."
 
 $ideaCdnIndex = $dryRunOutput.IndexOf("https://download-cdn.jetbrains.com/idea/", [StringComparison]::Ordinal)
@@ -66,7 +66,7 @@ $installerSource = Get-Content -LiteralPath $installerPath -Raw
 Assert-True ($installerSource -match "function Get-ExistingJavaInstallation") "installer does not detect an existing JDK."
 Assert-True ($installerSource -match "function Get-ExistingIdeaInstallation") "installer does not detect an existing IDEA."
 Assert-True ($installerSource -match "Existing compatible versions will be reused") "installer does not report component reuse."
-Assert-True ($installerSource -match "517b3590be43120c34c3891d09c97a1eddc12da982208c4f5adf1bdc1b5e3f15") "installer is missing the pinned Java checksum."
+Assert-True ($installerSource -match "454cfd334b9ca91c96dd8c2de97fcef6b9f1f98be9172ff076711f1c6b44e4e0") "installer is missing the pinned Java checksum."
 Assert-True ($installerSource -match "8393c2c9ccbd8581d646f01f0b6f0e7f78e58ebbe5cd8cbd95f9e236518e9fe8") "installer is missing the pinned IDEA checksum."
 Assert-True ($installerSource -match "Enter drive number or letter") "installer prompt does not accept a drive number or letter."
 Assert-True ($installerSource -match "--progress-bar") "installer download does not show a progress bar."

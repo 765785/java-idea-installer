@@ -17,12 +17,12 @@ $ProgressPreference = "SilentlyContinue"
 $DryRun = @($args) -contains "--dry-run"
 $IgnoreExisting = @($args) -contains "--ignore-existing"
 $NoLaunch = @($args) -contains "--no-launch"
-$JdkMajorVersion = 25
-$FallbackJavaVersion = "25.0.4.1+1"
-$FallbackJavaInstallerName = "OpenJDK25U-jdk_x64_windows_hotspot_25.0.4.1_1.msi"
-$FallbackJavaSha256 = "517b3590be43120c34c3891d09c97a1eddc12da982208c4f5adf1bdc1b5e3f15"
-$FallbackJavaSizeBytes = 115998720
-$FallbackJavaReleaseTag = "jdk-25.0.4.1%2B1"
+$JdkMajorVersion = 21
+$FallbackJavaVersion = "21.0.12.1+1"
+$FallbackJavaInstallerName = "OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.msi"
+$FallbackJavaSha256 = "454cfd334b9ca91c96dd8c2de97fcef6b9f1f98be9172ff076711f1c6b44e4e0"
+$FallbackJavaSizeBytes = 179351552
+$FallbackJavaReleaseTag = "jdk-21.0.12.1%2B1"
 $IdeaVersion = "2025.2.6.2"
 $IdeaInstallerName = "ideaIC-$IdeaVersion.exe"
 $IdeaInstallerSizeBytes = 993349720
@@ -117,11 +117,13 @@ function Get-Sha256 {
 function Get-RemoteText {
     param(
         [string]$Uri,
-        [string]$Label
+        [string]$Label,
+        [int]$Attempts = $MaximumAttempts,
+        [int]$TimeoutSec = 30
     )
 
-    return Invoke-WithRetry -Label $Label -Operation {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -TimeoutSec 30
+    return Invoke-WithRetry -Label $Label -Attempts $Attempts -Operation {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -TimeoutSec $TimeoutSec
         return [string]$response.Content
     }
 }
@@ -507,8 +509,8 @@ function New-JavaPackage {
 function Resolve-JavaPackage {
     $uri = "https://api.adoptium.net/v3/assets/latest/$JdkMajorVersion/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse&installer_type=msi"
     try {
-        $response = Invoke-WithRetry -Label "Resolve latest JDK $JdkMajorVersion LTS" -Operation {
-            return Invoke-RestMethod -Uri $uri -Headers $Headers -TimeoutSec 30
+        $response = Invoke-WithRetry -Label "Resolve latest JDK $JdkMajorVersion LTS" -Attempts 2 -Operation {
+            return Invoke-RestMethod -Uri $uri -Headers $Headers -TimeoutSec 15
         }
 
         $asset = @($response)[0]
@@ -534,7 +536,7 @@ function Resolve-JavaPackage {
         Write-Line -Message "[WARN] Adoptium API unavailable: $($_.Exception.Message)" -Color Yellow
         Write-Line "[INFO] Using verified JDK $FallbackJavaVersion fallback."
 
-        $officialUri = "https://github.com/adoptium/temurin25-binaries/releases/download/$FallbackJavaReleaseTag/$FallbackJavaInstallerName"
+        $officialUri = "https://github.com/adoptium/temurin$JdkMajorVersion-binaries/releases/download/$FallbackJavaReleaseTag/$FallbackJavaInstallerName"
         return New-JavaPackage `
             -Version $FallbackJavaVersion `
             -InstallerName $FallbackJavaInstallerName `
@@ -547,7 +549,7 @@ function Resolve-JavaPackage {
 
 function Resolve-IdeaChecksum {
     try {
-        $content = Get-RemoteText -Uri $IdeaChecksumUri -Label "Resolve IDEA checksum"
+        $content = Get-RemoteText -Uri $IdeaChecksumUri -Label "Resolve IDEA checksum" -Attempts 2 -TimeoutSec 15
         $match = [regex]::Match($content, "[a-fA-F0-9]{64}")
         if (-not $match.Success) {
             throw "JetBrains checksum file does not contain a SHA-256 value."

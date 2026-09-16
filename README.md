@@ -2,13 +2,13 @@
 
 面向 Windows 10 / 11 x64 的最小安装器。用户在网页下载一个 BAT 文件并双击后，安装器会自动：
 
-- 安装 Eclipse Adoptium 最新 JDK 25 LTS。
+- 安装 Eclipse Adoptium 最新 JDK 21 LTS。
 - 安装 IntelliJ IDEA Community `2025.2.6.2`。
 - 配置 `JAVA_HOME` 和 `PATH`。
 - 在桌面创建 IDEA 快捷方式。
 - 验证 `java`、`javac` 和 IDEA 启动器，并自动打开 IDEA。
 
-安装前会先检查现有环境。已安装兼容的 JDK 25 和 IntelliJ IDEA Community 2025.2.6.2 时，直接复用，不下载或覆盖。
+安装前会先检查现有环境。已安装兼容的 JDK 21 和 IntelliJ IDEA Community 2025.2.6.2 时，直接复用，不下载或覆盖。
 
 网页只提供桌面布局，不做手机端适配。
 
@@ -35,7 +35,7 @@
 
 固定子目录：
 
-- Java：`<安装根目录>\jdk-25`
+- Java：`<安装根目录>\jdk-21`
 - IDEA：`<安装根目录>\idea-2025.2.6.2`
 - 安装日志：`<安装根目录>\java-install.log` 和 `idea-install.log`
 
@@ -44,7 +44,7 @@
 ## 空间与权限
 
 - 至少需要 6 GB 可用空间。
-- Java MSI 约 116 MB，IDEA 安装包约 993 MB。
+- Java MSI 约 171 MB，IDEA 安装包约 993 MB。
 - Java 使用官方 MSI 标准安装，会触发一次 UAC。
 - IDEA 按当前用户安装，不修改 PATH、右键菜单或文件关联。
 - 安装器不会卸载其他位置的 Java 或 IDEA。

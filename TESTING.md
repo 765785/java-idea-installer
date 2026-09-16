@@ -23,8 +23,8 @@ installer contract checks passed
 - `index.html` 只暴露一个 `install-windows.bat` 下载入口。
 - `styles.css` 使用固定桌面画布且不包含移动端断点。
 - BAT 内嵌 PowerShell 能通过 PowerShell 5.1 语法解析。
-- `--dry-run` 能识别已有 JDK 25 和 IDEA `2025.2.6.2`，并跳过下载。
-- `--dry-run --ignore-existing` 能按顺序解析清华、南大和 GitHub 官方 JDK 25 MSI。
+- `--dry-run` 能识别已有 JDK 21 和 IDEA `2025.2.6.2`，并跳过下载。
+- `--dry-run --ignore-existing` 能按顺序解析清华、南大和 GitHub 官方 JDK 21 MSI。
 - `--dry-run --ignore-existing` 能按顺序解析 JetBrains CDN、官方 IDEA `2025.2.6.2` 和官方 SHA-256。
 - 旧检测、报告、修复桥、进度服务、macOS 和打包文件已删除。
 
@@ -39,7 +39,7 @@ cmd /d /c "scripts\install-windows.bat --dry-run"
 已有兼容版本时，预期输出包含：
 
 ```text
-Found Eclipse Temurin JDK 25
+Found Eclipse Temurin JDK 21
 Found IntelliJ IDEA Community 2025.2.6.2
 Existing compatible versions will be reused. No download is needed.
 ```
@@ -89,7 +89,7 @@ Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM
 预期结果：
 
 - Java MSI 只请求一次 UAC。
-- Java 位于 `%USERPROFILE%\JavaDev\jdk-25`。
+- Java 位于 `%USERPROFILE%\JavaDev\jdk-21`。
 - IDEA 位于 `%USERPROFILE%\JavaDev\idea-2025.2.6.2`。
 - 桌面存在 `IntelliJ IDEA 2025.2.6.2.lnk`。
 - IDEA 安装完成后自动打开。
@@ -104,12 +104,12 @@ where java
 where javac
 ```
 
-预期 `java` 和 `javac` 均为 JDK 25，`JAVA_HOME` 指向 `%USERPROFILE%\JavaDev\jdk-25`，末尾不包含 `\bin`。
+预期 `java` 和 `javac` 均为 JDK 21，`JAVA_HOME` 指向 `%USERPROFILE%\JavaDev\jdk-21`，末尾不包含 `\bin`。
 
 在 PowerShell 中检查文件和快捷方式：
 
 ```powershell
-Test-Path "$env:USERPROFILE\JavaDev\jdk-25\bin\java.exe"
+Test-Path "$env:USERPROFILE\JavaDev\jdk-21\bin\java.exe"
 Test-Path "$env:USERPROFILE\JavaDev\idea-2025.2.6.2\bin\idea64.exe"
 Test-Path "$env:USERPROFILE\JavaDev\.downloads"
 
@@ -142,7 +142,7 @@ $shortcut.TargetPath
 
 预期结果：
 
-- 检测到已有 JDK 25 和 IDEA `2025.2.6.2`。
+- 检测到已有 JDK 21 和 IDEA `2025.2.6.2`。
 - 输出 `Existing compatible versions will be reused. No download is needed.`。
 - 不访问下载源，不出现 UAC，不重复安装。
 - 快捷方式被刷新，IDEA 再次打开。
