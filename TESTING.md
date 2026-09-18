@@ -150,12 +150,10 @@ $shortcut.TargetPath
 
 ### 断网下载失败
 
-在全新的 Sandbox 中，使用管理员 PowerShell 添加入站无效映射：
+在全新的 Sandbox 中，使用管理员 PowerShell 禁用全部网络适配器：
 
 ```powershell
-$hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
-Add-Content -LiteralPath $hosts -Value "0.0.0.0 github.com"
-Add-Content -LiteralPath $hosts -Value "0.0.0.0 release-assets.githubusercontent.com"
+Get-NetAdapter | Disable-NetAdapter -Confirm:$false
 ```
 
 从命令提示符运行并记录退出码：
@@ -177,7 +175,7 @@ echo %ERRORLEVEL%
 echo %ERRORLEVEL%
 ```
 
-预期显示管理员权限被取消，退出码为 `1`，不安装 IDEA，也不创建桌面快捷方式。
+预期显示管理员权限被取消，退出码为 `2`，不安装 IDEA，也不创建桌面快捷方式。
 
 ### 国内镜像回退
 

@@ -128,6 +128,120 @@ function Get-RemoteText {
     }
 }
 
+function Invoke-DownloadSource {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (Test-Path -LiteralPath $Destination) {
+        Remove-Item -LiteralPath $Destination -Force
+    }
+
+    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+        & curl.exe `
+            --fail `
+            --location `
+            --retry 3 `
+            --retry-delay 2 `
+            --connect-timeout 30 `
+            --progress-bar `
+            --output $Destination `
+            $Source
+        if ($LASTEXITCODE -ne 0) {
+            throw "curl.exe download failed with exit code $LASTEXITCODE."
+        }
+        return
+    }
+
+    Write-Line "[INFO] curl.exe is unavailable. Downloading with PowerShell. Please wait."
+    Invoke-WebRequest -UseBasicParsing -Uri $Source -Headers $Headers -OutFile $Destination -TimeoutSec 900
+}
+
+function Get-EffectivePathEntries {
+    param(
+        [string]$MachinePath,
+        [string]$UserPath
+    )
+
+    $entries = foreach ($pathValue in @($MachinePath, $UserPath)) {
+        if (-not $pathValue) {
+            continue
+        }
+
+        foreach ($entry in ($pathValue -split ";")) {
+            $normalized = $entry.Trim().Trim('"').TrimEnd("\")
+            if ($normalized) {
+                $normalized
+            }
+        }
+    }
+
+    return @($entries | Select-Object -Unique)
+}
+
+function Get-FirstExecutablePath {
+    param(
+        [string[]]$PathEntries,
+        [string]$ExecutableName
+    )
+
+    foreach ($entry in @($PathEntries)) {
+        if (-not $entry) {
+            continue
+        }
+
+        $candidate = Join-Path $entry $ExecutableName
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+
+    return $null
+}
+
+function Merge-PathEntryFirst {
+    param(
+        [string]$PathValue,
+        [string]$Entry
+    )
+
+    $normalizedEntry = $Entry.Trim().Trim('"').TrimEnd("\")
+    $entries = foreach ($item in ($PathValue -split ";")) {
+        $normalized = $item.Trim().Trim('"').TrimEnd("\")
+        if ($normalized -and $normalized -ine $normalizedEntry) {
+            $normalized
+        }
+    }
+
+    $merged = @($normalizedEntry) + @($entries | Select-Object -Unique)
+    return $merged -join ";"
+}
+
+function Test-IsUserCancellation {
+    param([object]$ErrorRecord)
+
+    if (-not $ErrorRecord -or -not $ErrorRecord.Exception) {
+        return $false
+    }
+
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        if ($exception.NativeErrorCode -eq 1223) {
+            return $true
+        }
+
+        $message = [string]$exception.Message
+        if ($message -match "0x800704C7|1223|operation was canceled by the user|operation was cancelled by the user|操作已被用户取消|已被用户取消") {
+            return $true
+        }
+
+        $exception = $exception.InnerException
+    }
+
+    return $false
+}
+
 function Get-VerifiedFile {
     param(
         [string[]]$Uri,
@@ -154,27 +268,7 @@ function Get-VerifiedFile {
 
         try {
             Invoke-WithRetry -Label "$Label from $source" -Operation {
-                if (Test-Path -LiteralPath $Destination) {
-                    Remove-Item -LiteralPath $Destination -Force
-                }
-
-                if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
-                    & curl.exe `
-                        --fail `
-                        --location `
-                        --retry 3 `
-                        --retry-delay 2 `
-                        --connect-timeout 30 `
-                        --progress-bar `
-                        --output $Destination `
-                        $source
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "curl.exe download failed with exit code $LASTEXITCODE."
-                    }
-                } else {
-                    Write-Line "[INFO] curl.exe is unavailable. Downloading with PowerShell. Please wait."
-                    Invoke-WebRequest -UseBasicParsing -Uri $source -Headers $Headers -OutFile $Destination -TimeoutSec 900
-                }
+                Invoke-DownloadSource -Source $source -Destination $Destination
             } | Out-Null
         } catch {
             if (Test-Path -LiteralPath $Destination) {
@@ -380,37 +474,152 @@ function Get-ExistingIdeaInstallation {
     return $null
 }
 
+function Test-JavaCommandResolution {
+    param(
+        [string]$JdkHome,
+        [string]$MachinePath,
+        [string]$UserPath
+    )
+
+    $normalized = Normalize-JavaHome -Path $JdkHome
+    $pathEntries = Get-EffectivePathEntries -MachinePath $MachinePath -UserPath $UserPath
+    $firstJava = Get-FirstExecutablePath -PathEntries $pathEntries -ExecutableName "java.exe"
+    $firstJavac = Get-FirstExecutablePath -PathEntries $pathEntries -ExecutableName "javac.exe"
+    $expectedJava = [IO.Path]::GetFullPath((Join-Path $normalized "bin\java.exe"))
+    $expectedJavac = [IO.Path]::GetFullPath((Join-Path $normalized "bin\javac.exe"))
+
+    return ($firstJava -ieq $expectedJava -and $firstJavac -ieq $expectedJavac)
+}
+
+function Invoke-ElevatedJavaEnvironment {
+    param(
+        [string]$JdkHome,
+        [string]$InstallerPath,
+        [string]$LogPath,
+        [string]$ResultPath
+    )
+
+    $normalized = Normalize-JavaHome -Path $JdkHome
+    $payload = @{
+        JdkHome = $normalized
+        JavaBin = Join-Path $normalized "bin"
+        InstallerPath = $InstallerPath
+        LogPath = $LogPath
+        ResultPath = $ResultPath
+    } | ConvertTo-Json -Compress
+    $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+    $helper = "`$payloadBase64 = '$payloadBase64'`r`n" + @'
+$ErrorActionPreference = "Stop"
+try {
+    $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payloadBase64)) | ConvertFrom-Json
+    if ($data.InstallerPath) {
+        $msiArguments = @(
+            "/i",
+            ('"' + $data.InstallerPath + '"'),
+            "/qn",
+            "/norestart",
+            "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJavaHome",
+            ('INSTALLDIR="' + $data.JdkHome + '"')
+        )
+        if ($data.LogPath) {
+            $msiArguments += @("/L*v", ('"' + $data.LogPath + '"'))
+        }
+
+        $process = Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList $msiArguments `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+        if ($process.ExitCode -notin @(0, 3010)) {
+            throw "Java installer returned exit code $($process.ExitCode)."
+        }
+    }
+
+    [Environment]::SetEnvironmentVariable("JAVA_HOME", $data.JdkHome, "Machine")
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $entries = foreach ($item in ($machinePath -split ";")) {
+        $normalized = $item.Trim().Trim('"').TrimEnd("\")
+        if ($normalized -and $normalized -ine $data.JavaBin.TrimEnd("\")) {
+            $normalized
+        }
+    }
+    $newMachinePath = (@($data.JavaBin) + @($entries | Select-Object -Unique)) -join ";"
+    [Environment]::SetEnvironmentVariable("Path", $newMachinePath, "Machine")
+    "OK" | Set-Content -LiteralPath $data.ResultPath -Encoding ASCII
+    exit 0
+} catch {
+    $_.Exception.Message | Set-Content -LiteralPath $data.ResultPath -Encoding UTF8
+    exit 1
+}
+'@
+
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper))
+    try {
+        $process = Start-Process `
+            -FilePath "powershell.exe" `
+            -ArgumentList @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand) `
+            -Verb RunAs `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+    } catch {
+        if (Test-IsUserCancellation -ErrorRecord $_) {
+            throw (New-Object System.OperationCanceledException "The administrator permission request was cancelled.")
+        }
+        throw "Could not start the elevated Java environment update: $($_.Exception.Message)"
+    }
+
+    $result = if (Test-Path -LiteralPath $ResultPath) {
+        (Get-Content -LiteralPath $ResultPath -Raw).Trim()
+    } else {
+        ""
+    }
+
+    if ($process.ExitCode -ne 0 -or $result -ne "OK") {
+        throw "Java environment update failed. $result"
+    }
+}
+
 function Set-JavaEnvironment {
-    param([string]$JdkHome)
+    param(
+        [string]$JdkHome,
+        [string]$ResultDirectory
+    )
 
     $normalized = Normalize-JavaHome -Path $JdkHome
     $javaBin = Join-Path $normalized "bin"
     [Environment]::SetEnvironmentVariable("JAVA_HOME", $normalized, "User")
     $env:JAVA_HOME = $normalized
 
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $userEntries = foreach ($item in ($userPath -split ";")) {
+        $entry = $item.Trim().Trim('"').TrimEnd("\")
+        if ($entry -and $entry -ine $javaBin.TrimEnd("\")) {
+            $entry
+        }
+    }
+    [Environment]::SetEnvironmentVariable("Path", ($userEntries -join ";"), "User")
+
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $effectivePath = @($machinePath, $userPath) -join ";"
-    $hasJavaBin = @($effectivePath -split ";" | Where-Object {
-        $_.Trim().TrimEnd("\") -ieq $javaBin.TrimEnd("\")
-    }).Count -gt 0
-
-    if (-not $hasJavaBin) {
-        $pathParts = @($userPath, $javaBin) |
-            Where-Object { $_ } |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ } |
-            ForEach-Object { $_.TrimEnd(";") }
-        $newUserPath = $pathParts -join ";"
-        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+    if (-not (Test-JavaCommandResolution -JdkHome $normalized -MachinePath $machinePath -UserPath $userPath)) {
+        if (-not $ResultDirectory) {
+            $ResultDirectory = [IO.Path]::GetTempPath()
+        }
+        $resultPath = Join-Path $ResultDirectory ("java-environment-" + [guid]::NewGuid().ToString("N") + ".txt")
+        Write-Line "[INFO] Administrator permission is needed once to make JDK 21 the default Java."
+        Invoke-ElevatedJavaEnvironment -JdkHome $normalized -ResultPath $resultPath
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
     }
 
-    $currentPathEntries = @($env:Path -split ";" | Where-Object {
-        $_.Trim().TrimEnd("\") -ieq $javaBin.TrimEnd("\")
-    })
-    if ($currentPathEntries.Count -eq 0) {
-        $env:Path = "$javaBin;$env:Path"
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not (Test-JavaCommandResolution -JdkHome $normalized -MachinePath $machinePath -UserPath $userPath)) {
+        throw "JDK 21 was installed, but java.exe still resolves to another JDK. Check the machine PATH."
     }
+
+    $env:Path = Merge-PathEntryFirst -PathValue $env:Path -Entry $javaBin
 }
 
 function Get-FixedDriveChoices {
@@ -499,7 +708,6 @@ function New-JavaPackage {
         Version = $Version
         InstallerName = $InstallerName
         SourceUri = $ResolutionSource
-        Uri = $OfficialUri
         Uris = @($sources)
         Sha256 = $Sha256.ToLowerInvariant()
         Size = $SizeBytes
@@ -588,33 +796,14 @@ function Install-Java {
         -ExpectedSize $Package.Size `
         -Label "Download Java $($Package.Version)" | Out-Null
 
-    $arguments = @(
-        "/i",
-        "`"$installerPath`"",
-        "/qn",
-        "/norestart",
-        "/L*v",
-        "`"$LogPath`"",
-        "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJavaHome",
-        "INSTALLDIR=`"$JdkHome`""
-    )
-
     Write-Line "[INFO] Installing Java with administrator permission."
-    try {
-        $process = Start-Process `
-            -FilePath "msiexec.exe" `
-            -ArgumentList $arguments `
-            -Verb RunAs `
-            -WindowStyle Hidden `
-            -Wait `
-            -PassThru
-    } catch {
-        throw "Java installation needs administrator approval. UAC was cancelled or blocked."
-    }
-
-    if ($process.ExitCode -notin @(0, 3010)) {
-        throw "Java installer returned exit code $($process.ExitCode). See $LogPath"
-    }
+    $resultPath = Join-Path $DownloadDirectory ("java-install-" + [guid]::NewGuid().ToString("N") + ".txt")
+    Invoke-ElevatedJavaEnvironment `
+        -JdkHome $JdkHome `
+        -InstallerPath $installerPath `
+        -LogPath $LogPath `
+        -ResultPath $resultPath
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
 }
 
 function Install-Idea {
@@ -681,15 +870,24 @@ function New-IdeaDesktopShortcut {
 function Test-JavaInstallation {
     param([string]$JdkHome)
 
-    $javaExe = Join-Path $JdkHome "bin\java.exe"
-    $javacExe = Join-Path $JdkHome "bin\javac.exe"
-    if (-not (Test-Path -LiteralPath $javaExe -PathType Leaf)) {
-        throw "java.exe was not found at $javaExe"
+    $expectedJava = Join-Path $JdkHome "bin\java.exe"
+    $expectedJavac = Join-Path $JdkHome "bin\javac.exe"
+    if (-not (Test-Path -LiteralPath $expectedJava -PathType Leaf)) {
+        throw "java.exe was not found at $expectedJava"
     }
-    if (-not (Test-Path -LiteralPath $javacExe -PathType Leaf)) {
-        throw "javac.exe was not found at $javacExe"
+    if (-not (Test-Path -LiteralPath $expectedJavac -PathType Leaf)) {
+        throw "javac.exe was not found at $expectedJavac"
     }
 
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not (Test-JavaCommandResolution -JdkHome $JdkHome -MachinePath $machinePath -UserPath $userPath)) {
+        throw "java.exe or javac.exe still resolves to another JDK. Check the persistent PATH."
+    }
+
+    $pathEntries = Get-EffectivePathEntries -MachinePath $machinePath -UserPath $userPath
+    $javaExe = Get-FirstExecutablePath -PathEntries $pathEntries -ExecutableName "java.exe"
+    $javacExe = Get-FirstExecutablePath -PathEntries $pathEntries -ExecutableName "javac.exe"
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & $javaExe -version 2>&1 | Out-Null
@@ -711,12 +909,6 @@ function Test-JavaInstallation {
         throw "JAVA_HOME was not configured to $JdkHome."
     }
 
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $effectivePath = @($machinePath, $userPath) -join ";"
-    if ($effectivePath -notmatch [regex]::Escape($JdkHome)) {
-        throw "PATH does not contain the installed JDK."
-    }
 }
 
 function Remove-DownloadDirectory {
@@ -837,7 +1029,7 @@ try {
             -LogPath $ideaLog
     }
 
-    Set-JavaEnvironment -JdkHome $jdkHome
+    Set-JavaEnvironment -JdkHome $jdkHome -ResultDirectory $downloadDirectory
     Test-JavaInstallation -JdkHome $jdkHome
     New-IdeaDesktopShortcut -IdeaHome $ideaHome
     if ($root -and $downloadDirectory) {
@@ -854,6 +1046,10 @@ try {
         Start-Process -FilePath (Join-Path $ideaHome "bin\idea64.exe") | Out-Null
     }
     exit 0
+} catch [System.OperationCanceledException] {
+    Write-Line
+    Write-Line -Message "[CANCELLED] $($_.Exception.Message)" -Color Yellow
+    exit 2
 } catch {
     Write-Line
     Write-Line -Message "[ERROR] $($_.Exception.Message)" -Color Red

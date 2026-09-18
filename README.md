@@ -45,7 +45,7 @@
 
 - 至少需要 6 GB 可用空间。
 - Java MSI 约 171 MB，IDEA 安装包约 993 MB。
-- Java 使用官方 MSI 标准安装，会触发一次 UAC。
+- Java 使用官方 MSI 标准安装；安装或机器级 PATH 修正最多触发一次 UAC。已有正确 JDK 21 环境时不会请求权限。
 - IDEA 按当前用户安装，不修改 PATH、右键菜单或文件关联。
 - 安装器不会卸载其他位置的 Java 或 IDEA。
 
