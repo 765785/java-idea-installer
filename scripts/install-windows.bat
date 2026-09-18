@@ -232,7 +232,7 @@ function Test-IsUserCancellation {
         }
 
         $message = [string]$exception.Message
-        if ($message -match "0x800704C7|1223|operation was canceled by the user|operation was cancelled by the user|操作已被用户取消|已被用户取消") {
+        if ($message -match "0x800704C7|1223|operation was canceled by the user|operation was cancelled by the user") {
             return $true
         }
 

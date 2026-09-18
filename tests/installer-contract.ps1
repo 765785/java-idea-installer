@@ -92,6 +92,7 @@ Assert-True ($installerSource -match "Keep this window open while downloading") 
 Assert-True ($installerSource -match "catch \[System\.OperationCanceledException\]") "installer does not handle user cancellation separately."
 Assert-True ($installerSource -match "(?m)^\s*exit 2\s*$") "installer does not return exit code 2 for user cancellation."
 Assert-True ($installerSource -notmatch "(?m)^\s*Uri = \$OfficialUri\s*$") "installer still exposes the unused singular Uri field."
+Assert-True ($installerSource -notmatch "[^\x00-\x7F]") "install-windows.bat must remain ASCII-only for Windows PowerShell 5.1 compatibility."
 
 $definitions = Get-InstallerPowerShellDefinitions -Source $powerShellSource
 Invoke-Expression $definitions
